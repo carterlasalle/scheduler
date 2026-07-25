@@ -216,6 +216,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				now := time.Now()
 				_, _ = s.db.Exec(`UPDATE ticks SET status='completed', outcome='ok', spawned_at=?, finished_at=?, output=?, session_id='gateway' WHERE id=?`,
 					now.Format(time.RFC3339), now.Format(time.RFC3339), text, tickID)
+				_, _ = s.db.Exec(`UPDATE projects SET last_tick_started = ? WHERE name = ?`,
+					now.Format(time.RFC3339), project.Name)
 
 				log.Printf("GATEWAY: %s tick=%s tokens=%d/%d",
 					project.Name, tickID, resp.Usage.InputTokens, resp.Usage.OutputTokens)
@@ -348,6 +350,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	if err != nil {
 		log.Printf("ERROR updating tick %s to running: %v", tickID, err)
 	}
+	// Also set last_tick_started on the project so cooldown tracking works.
+	_, _ = s.db.Exec(`UPDATE projects SET last_tick_started = ? WHERE name = ?`,
+		st.Started.Format(time.RFC3339), project.Name)
 
 	log.Printf("SPAWN: %s tick=%s pid=%d workdir=%s", project.Name, tickID, st.PID, project.Workdir)
 	return st, nil
