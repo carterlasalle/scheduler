@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/coding-herms/scheduler/internal/config"
 	"github.com/coding-herms/scheduler/internal/database"
 )
 
@@ -82,11 +83,11 @@ func main() {
 
 		model := j.Model
 		if model == "" {
-			model = "deepseek-v4-pro"
+			model = config.DefaultModel
 		}
 		provider := j.Provider
 		if provider == "" {
-			provider = "deepseek-foreman"
+			provider = config.DefaultProvider
 		}
 
 		if *dryRun {
