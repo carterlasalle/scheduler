@@ -26,7 +26,7 @@
 # Coding Hermes Scheduler — Model Router Task Matrix
 
 > **Core purpose:** Cron-driven autonomous development loop scheduler — manages 63 projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet PASS. Tick #149 — IDLE. All 33 GitReins tasks complete, board has only NEVER-DONE + E2E-001. Self-pause. Cooldown=43200s.
+> **Status:** Build/test/lint/vet PASS. Tick #152 — IDLE. All 33 GitReins tasks complete, board has only NEVER-DONE + E2E-001. 11-gate audit clean. Self-pause. Cooldown=43200s.
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
@@ -147,3 +147,52 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 | 11 | Dispatch | IDLE | No real work. NEVER-DONE audit ran last tick (#149). Scheduler healthy (uptime 6h35m, 124 HTTP spawns, 4 active ticks). Self-pause at 43200s. |
 
 **Verdict:** IDLE — maintenance mode. All gates pass. 33 GitReins tasks complete. No actionable work. Next tick should run NEVER-DONE 11-point audit per 3-4 tick cadence.
+
+### Tick #151 — 2026-07-25 06:29 UTC (DeepSeek V4 Pro)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main up to date, no uncommitted changes |
+| 2 | GitReins guard | PASS | Secrets clean, no Go files staged |
+| 3 | Hilo graph | PASS | 498 edges across 70 files, 68 source files (3 languages) |
+| 4 | Tests | PASS | 9/9 packages, 0 failures |
+| 5 | TODO/FIXME scan | CLEAN | 0 matches |
+| 6 | Deps check | OK | 6 outdated (minor patches: go-cmp v0.6→v0.7, demangle, go-isatty v0.0.23→v0.0.24, goldmark v1.4.13→v1.8.4, x/exp, x/telemetry) |
+| 7 | GitReins config | OK | Evaluator configured (deepseek-v4-flash, 10m, 0.2M/0.05M). 33/33 tasks complete |
+| 8 | Secrets | CLEAN | gitleaks: no leaks found (5.68 MB scanned) |
+| 9 | Static analysis (vet) | PASS | go vet clean. golangci-lint: 0 issues |
+| 10 | Board consistency | SYNCED | 33/33 GitReins tasks complete, board has only NEVER-DONE + E2E-001 |
+| 11 | Dispatch | IDLE | No real work. 11-point NEVER-DONE audit ran this tick — all clean. Scheduler healthy (uptime 6h55m, 132 HTTP spawns, 4 active ticks). Self-pause. Cooldown=43200s. |
+
+**NEVER-DONE 11-point audit (tick #151):**
+1. Spec alignment: PASS — 11 specs (S01-S11), all synced to implementation. S01 architecture updated via AUDIT-018.
+2. Doc coverage: PASS — 7 doc files (AGENTS.md, README.md, CHANGELOG.md, CODE_OF_CONDUCT.md, CONTRIBUTING.md, SECURITY.md, SUPPORT.md). Comprehensive.
+3. Test gaps: PASS — 9/9 packages with coverage 4.0-91.0%. Core packages: api 75.7%, config 89.3%, dashboard 80.6%, database 69.3%, mcp 84.7%, scheduler 66.3%, sync 91.0%. cmd/schedulerd at 4.0% (thin main, expected).
+4. Package upgrades: OK — 6 minor patches (all non-breaking, same set as previous tick).
+5. Pitfall hunt: PASS — 10+ pitfalls documented in coding-hermes-scheduler v3.11. All addressed in code.
+6. Performance: PASS — 7 benchmarks (allocate, pack, pick, spawn prep). No N+1 queries (dashboard fixed e83eaf4).
+7. Endpoint verification: PASS — Scheduler API healthy (uptime 6h55m, 132 HTTP spawns). All endpoints responding.
+8. CI/CD: PASS — GitHub Actions with ci.yaml + ci.yml + release.yaml (Go 1.26).
+9. DuckBrain sync: PASS — sync package at 91.0% coverage. Wired in main.go lines 302-305.
+10. Code quality: PASS — 0 lint issues, 0 hardcoded models/secrets, all magic numbers as constants.
+11. Middle-out wiring: PASS — All routes registered in main.go: loop → api.NewServer → mcp.NewServer → all handlers.
+
+**Verdict:** IDLE — maintenance mode. All gates pass. 11-point audit clean. 33 GitReins tasks complete. No actionable work. Self-pause at 43200s.
+
+### Tick #152 — 2026-07-25 01:56 UTC (DeepSeek V4 Pro)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Board modified from tick #151, no code changes |
+| 2 | GitReins guard | PASS | Secrets clean, no Go files staged |
+| 3 | Hilo graph | PASS | 498 edges across 70 files, 68 source files (3 languages) |
+| 4 | Tests | PASS | 9/9 packages, 0 failures |
+| 5 | TODO/FIXME scan | CLEAN | 0 matches |
+| 6 | Deps check | OK | 0 outdated direct deps |
+| 7 | GitReins config | OK | Evaluator configured (deepseek-v4-flash, 10m, 0.2M/0.05M). 33/33 tasks complete |
+| 8 | Secrets | CLEAN | gitleaks: no leaks found (5.69 MB scanned) |
+| 9 | Static analysis (vet) | PASS | go vet clean |
+| 10 | Board consistency | SYNCED | Dual-source: 33/33 GitReins tasks complete, board has only NEVER-DONE + E2E-001 |
+| 11 | Dispatch | IDLE | No real work. Cooldown corrected from 1350s (drift) to 43200s. Scheduler healthy (uptime 7h23m, 3 active ticks). Self-pause. |
+
+**Verdict:** IDLE — maintenance mode. All gates pass. 33 GitReins tasks complete. Previous tick (#151) ran full 11-point NEVER-DONE audit — all clean. Cooldown corrected from 1350s to 43200s (ApplyFleetConfig drift after daemon restart). No actionable work.
