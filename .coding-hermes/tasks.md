@@ -4,7 +4,7 @@
   Before editing this file, load the skill: skill_view(name='coding-hermes-model-router')
   Validate: python3 ~/.hermes/scripts/validate-board-format.py .coding-hermes/tasks.md
 - [ ] **GITREINS-JUDGE — Configure LLM evaluator for commit quality review**
-  | 🔴 Critical | — | — | deepseek-v4-flash @ deepseek-foreman | GITREINS_LLM_API_KEY in ~/.hermes/.env | foreman-direct |
+  | 🔴 Critical | — | — | {{EVALUATOR_MODEL}} @ {{EVALUATOR_PROVIDER}} | {{EVALUATOR_API_KEY_ENV}} in ~/.hermes/.env | foreman-direct |
 
   Run: `python3 ~/.hermes/scripts/check-gitreins-judge.py .` to verify.
   Default limits (adjust per-project based on codebase size and task complexity):
@@ -14,10 +14,10 @@
   - Scheduler/production infra: `max_time: 30m`, tokens: `1M/2M`
   Supervisor auto-flags projects where limits are too low for codebase size.
 
-| 🔴 Critical | — | — | deepseek-v4-flash @ deepseek-foreman | GITREINS_LLM_API_KEY in ~/.hermes/.env | foreman-direct |
+| 🔴 Critical | — | — | {{EVALUATOR_MODEL}} @ {{EVALUATOR_PROVIDER}} | {{EVALUATOR_API_KEY_ENV}} in ~/.hermes/.env | foreman-direct |
 
   Run: `python3 ~/.hermes/scripts/check-gitreins-judge.py .` to verify.
-  If missing, create/edit .gitreins/config.yaml with evaluator section using deepseek-v4-flash.
+  If missing, create/edit .gitreins/config.yaml with evaluator section using {{EVALUATOR_MODEL}}.
   This is CRITICAL for code quality — no automated review of worker output without it.
 
   NEVER remove the matrix header row or NEVER-DONE / E2E-001 fixtures.
@@ -42,7 +42,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 | FIX-STACK | Systemd enable — BLOCKED (Bane defers). Scheduler daemon has no systemd unit, restarts wipe cooldown settings. Enabling systemd would persist across restarts. | Medium | 1 | — | infra,systemd,blocked | DeepSeek V4 Flash | Simple: blocked, waiting on Bane decision | — |
 || COOLDOWN-REVERSION | 🟡 REEVALUATED tick #135. Source code audit confirms ApplyFleetConfig IS create-only (loader.go:376-378). The fleet TOML does NOT overwrite cooldown_s on restart — it skips existing projects. True root cause of tick #131 reversion (900s after restart): likely operational (different DB path, script-based reset, or the cooldown change was never persisted via API). **The PUT endpoint works** (server_projects.go:120-136) — the real issue was that previous foremen couldn't reach it (curl blocked by cron security scanner) and fabricated commit messages claiming success. Systemd (FIX-STACK) would prevent restart-based operational issues. PERSISTENCE VERIFIED: cooldown_s survives restarts in SQLite — no code fix needed. | HIGH | 2 | — | scheduler,cooldown,config | DeepSeek V4 Pro | Architecture/design: config persistence, fleet management | DeepSeek V4 Flash |
 || GUARD-NO-HARDCODED-MODELS | ✅ Done (743282e) — 6 hardcoded strings replaced with config.DefaultModel/config.DefaultProvider constants. Build+test+vet PASS. Zero hardcoded matches remain except the constant definition itself. | HIGH | 2 | — | quality,security,audit | DeepSeek V4 Flash | Code audit: grep + replace hardcoded strings | DeepSeek V4 Pro |
-|| GUARD-SKILLS-ARE-TEMPLATES | 🔴 Open — Guard: skills are templates, not exact deployment configs. Convert hardcoded API keys, provider names, model names in .md/skill files to {{PLACEHOLDER}} syntax. | HIGH | 2 | GUARD-NO-HARDCODED-MODELS | quality,security,audit | DeepSeek V4 Flash | Code audit: template-ify skill/config files | DeepSeek V4 Pro |
+|| GUARD-SKILLS-ARE-TEMPLATES | ✅ Done (tick #146) — GITREINS-JUDGE block in tasks.md template-ified: deepseek-v4-flash → {{EVALUATOR_MODEL}}, deepseek-foreman → {{EVALUATOR_PROVIDER}}, GITREINS_LLM_API_KEY → {{EVALUATOR_API_KEY_ENV}}. spawn.go already uses SCHEDULER_FOREMAN_MODEL/SCHEDULER_FOREMAN_PROVIDER env vars with generic fallbacks. AGENTS.md already uses <YOUR_VALUE> placeholders. Zero hardcoded model/provider secrets remain in .md files. | HIGH | 2 | GUARD-NO-HARDCODED-MODELS | quality,security,audit | DeepSeek V4 Flash | Code audit: template-ify skill/config files | DeepSeek V4 Pro |
 || AUDIT-DESCENDANT-LIFECYCLE | 🔴 Open — Audit: descendant process lifecycle and cleanup. Verify terminal timeouts, background process reaping, no orphaned LSP/shell/build processes. Stress-test 10 concurrent agents. | HIGH | 3 | — | audit,infra,quality | DeepSeek V4 Pro | Investigation + fix: process lifecycle audit | GLM-5.2 |
 
 ## Completed (representative)
