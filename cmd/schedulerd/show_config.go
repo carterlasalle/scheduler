@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/coding-herms/scheduler/internal/config"
 )
 
 // printSchema emits a JSON Schema for schedulerd.toml describing every
 // TOML key, its type, default, env-var override, and CLI flag mapping.
 func printSchema() {
-	fmt.Print(`{
+	fmt.Printf(`{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/coding-hermes/scheduler/schemas/schedulerd.toml.schema.json",
   "title": "schedulerd.toml",
@@ -62,8 +64,8 @@ func printSchema() {
           "priority": { "type": "integer", "default": 5 },
           "cooldown_s": { "type": "integer", "default": 900 },
           "decay_rate": { "type": "number", "default": 1.0 },
-          "model": { "type": "string", "default": "deepseek-v4-pro" },
-          "provider": { "type": "string", "default": "deepseek-foreman" },
+          "model": { "type": "string", "default": %q },
+          "provider": { "type": "string", "default": %q },
           "command": { "type": "string" },
           "namespace_id": { "type": "string" },
           "deliver": { "type": "string" },
@@ -87,7 +89,7 @@ func printSchema() {
     }
   }
 }
-`)
+`, config.DefaultModel, config.DefaultProvider)
 }
 
 // printConfig renders the current (CLI-level) configuration as TOML.

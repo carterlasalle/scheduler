@@ -11,6 +11,13 @@
 // (lowest → highest): TOML config file < SCHEDULER_* env vars < CLI flags.
 package config
 
+// Default model and provider names used as fallbacks when no value is
+// specified in TOML, environment variables, or CLI flags.
+const (
+	DefaultModel    = "deepseek-v4-pro"
+	DefaultProvider = "deepseek-foreman"
+)
+
 // FleetConfig is the top-level TOML structure decoded from a fleet.toml.
 // The [[projects]] and [[namespaces]] array-of-tables slices allow the
 // same project/namespace to be defined declaratively and in order.
@@ -95,8 +102,8 @@ type ProjectDef struct {
 	Priority    int     `toml:"priority"`   // default 5 if <= 0
 	CooldownS   int     `toml:"cooldown_s"` // default 900 if <= 0
 	DecayRate   float64 `toml:"decay_rate"` // default 1.0 if <= 0
-	Model       string  `toml:"model"`      // default "deepseek-v4-pro"
-	Provider    string  `toml:"provider"`   // default "deepseek-foreman"
+	Model       string  `toml:"model"`      // default DefaultModel
+	Provider    string  `toml:"provider"`   // default DefaultProvider
 	Command     string  `toml:"command"`
 	NamespaceID string  `toml:"namespace_id"` // optional FK → namespaces.id
 	Deliver     string  `toml:"deliver"`

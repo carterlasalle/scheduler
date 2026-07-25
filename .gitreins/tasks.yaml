@@ -417,7 +417,7 @@ tasks:
   - "no hardcoded gateway URLs (http://127.0.0.1:8642) \u2014 use config placeholders"
   - grepping for 'deepseek-v4' or 'gpt-5.6' or 'openai-codex' in *.go files returns
     zero matches (except comments/constants documenting the pattern)
-  status: pending
+  status: in_progress
   created_at: '2026-07-22T20:30:15.308416+00:00'
 - id: GUARD-SKILLS-ARE-TEMPLATES
   title: 'Guard: skills are templates, not exact deployment configs'
