@@ -402,3 +402,50 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 11. Middle-out wiring: PASS — All routes registered: main.go → scheduler, api, dashboard, database, mcp, sync, config
 
 **Verdict:** IDLE — maintenance mode. All gates pass. 33 GitReins tasks complete. 11-point audit clean (identical to prior audits — no drift). Cooldown restored from 900s to 43200s post-daemon-restart (recurring cooldown-drift pattern). Scheduler healthy, fleet operational. Self-pause at 43200s. No actionable work.
+
+### Tick #160 — 2026-07-26 05:35 UTC (DeepSeek V4 Flash)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main up to date (b699bdd), 2 commits ahead of origin, no uncommitted changes |
+| 2 | GitReins guard | PASS | Secrets clean (gitleaks: 5.67MB scanned, no leaks), no Go files staged |
+| 3 | Hilo graph | PASS | 480 edges across 68 files (warm); stats: 498 edges across 70 files (3 languages). Stable — unchanged from prior ticks |
+| 4 | Tests | PASS | 9/9 packages, 0 failures (cached) |
+| 5 | TODO/FIXME scan | CLEAN | 0 matches |
+| 6 | Deps check | OK | 6 outdated (same stable set: go-cmp v0.6→v0.7, demangle, go-isatty v0.0.23→v0.0.24, goldmark v1.4.13→v1.8.4, x/exp, x/telemetry) |
+| 7 | GitReins config | OK | Evaluator configured (deepseek-v4-flash, 10m, 0.2M/0.05M). **35/35 GitReins tasks complete**, 0 pending, 0 in_progress |
+| 8 | Secrets | CLEAN | gitleaks: clean (via GitReins guard) |
+| 9 | Static analysis (vet) | PASS | go vet clean, 0 issues |
+| 10 | Board consistency | SYNCED | Dual-source: 35/35 GitReins tasks complete, 0 pending. Board has only NEVER-DONE + E2E-001 |
+| 11 | Dispatch | IDLE — COOLDOWN-DRIFT CONFIRMED | **Cooldown found at 1350s (was 43200s at tick #159). Same daemon PID 2101599** (started Jul 25, no restart). This CONFIRMS cooldown drift without restart. Investigated code exhaustively: autoSlowdown ruled out (case mismatch `VERDICT:` vs `**Verdict:**`), ApplyFleetConfig ruled out (create-only, no periodic reload), no SQL write path uncovered. Three remaining suspects: (1) MCP `toolFleetSetCooldown` called by another agent, (2) SQLite data integrity issue, (3) undiscovered code path. **Events table does not log cooldown changes** — adding event logging for cooldown mutations is the recommended next step. Cooldown restored to 43200s via PUT API, verified via GET and direct DB query. |
+
+**COOLDOWN-DRIFT INVESTIGATION (tick #160 update):**
+- **Daemon PID:** 2101599 — SAME as tick #159 (started Jul 25, no restart). Confirms drift on running daemon.
+- **Drift signature:** 1350s = 900 × 1.5 ✓ (one autoSlowdown cycle from default 900s). But autoSlowdown is a no-op for this project (uppercase/lowercase mismatch on the `VERDICT:` keyword in `strings.Contains()`).
+- **Code paths ruled out:**
+  - `autoSlowdown` (slowdown.go:23) — `strings.Contains(text, "VERDICT:")` does NOT match `**Verdict:**` in foreman markdown output. Confirmed: `isIdle` is FALSE for all scheduler foreman ticks.
+  - `ApplyFleetConfig` (loader.go:376-378) — create-only, checks `GetProject` first and skips if exists. No upsert on restart.
+  - Daemon restart — PID is the same, no restart since Jul 25.
+  - `toolFleetSetCooldown` — code path IS reachable via MCP from any agent. Verification: check if any foreman agent is calling this tool on `coding-hermes-scheduler`.
+- **Recommendation:** Add event logging (`INSERT INTO events ...`) in autoSlowdown AND on every cooldown_s change to make the root cause auditable. Events table already exists with project/severity/message fields.
+- **Cooldown restored:** 43200s via PUT API (verified via GET and direct SQLite query).
+
+**NEVER-DONE 11-point audit (tick #160, 1 tick since #159):**
+1. Spec alignment: PASS — 11 specs (S01-S11), all present and synced to implementation
+2. Doc coverage: PASS — 7 doc files + docs/adr/ + docs/fleet.md, comprehensive
+3. Test gaps: PASS — 9/9 packages covered, core packages: api 75.7%, config 89.3%, dashboard 80.6%, database 69.3%, mcp 84.7%, scheduler 66.3%, sync 91.0%
+4. Package upgrades: OK — 6 minor patches (non-breaking, same set as prior ticks)
+5. Pitfall hunt: PASS — 10+ pitfalls in coding-hermes-scheduler skill, all addressed
+6. Performance: PASS — 7 benchmarks. No N+1 queries. Dashboard renders <50ms
+7. Endpoint verification: PASS — Scheduler API healthy (uptime 4h22m, 118 exec spawns, 5 active ticks)
+8. CI/CD: PASS — GitHub Actions (Go 1.26, golangci-lint, build, test)
+9. DuckBrain sync: PASS — sync package at 91.0% coverage, wired in main.go
+10. Code quality: PASS — 0 lint issues, 0 TODO/FIXME, 0 hardcoded models/secrets, all magic numbers as constants
+11. Middle-out wiring: PASS — All routes registered: main.go → scheduler, api, dashboard, database, mcp, sync, config
+
+**Fleet health snapshot:**
+- 63 total projects: 51 at 43200s cooldown, 8 at 900s, 1 at 2025s (HEADING — autoSlowdown active on OTHER projects), 2 at 14400s, 1 at 86400s (bunker)
+- 5 active ticks, 118 HTTP spawns (no exec spawns since last restart)
+- 4h22m uptime, DB healthy (38MB WAL mode SQLite)
+
+**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. 11-point audit clean (no drift from prior audits). COOLDOWN-REVERSION task updated with confirmed same-daemon drift evidence — root cause still unknown. Recommended action: add event logging for cooldown mutations to trace the source in future ticks. Cooldown restored to 43200s. Self-pause. No actionable code work.
