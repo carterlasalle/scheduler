@@ -485,4 +485,37 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 - 19m uptime (daemon crashed/restarted)
 - Most projects at 43200s cooldown; 8 at 900s (including coding-hermes-scheduler — restored this tick)
 
-**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. 11-point audit clean. Cooldown restored from 900→43200s — this time the drift was daemon-restart-associated (different from ticks #159→#160 which proved running-daemon drift). COOLDOWN-REVERSION item updated. Self-pause at 43200s. No actionable code work.
+|**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. 11-point audit clean. Cooldown restored from 900→43200s — this time the drift was daemon-restart-associated (different from ticks #159→#160 which proved running-daemon drift). COOLDOWN-REVERSION item updated. Self-pause at 43200s. No actionable code work.
+
+### Tick #162 — 2026-07-26 13:08 UTC (DeepSeek V4 Flash)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at 19d0aa9, no uncommitted changes, up to date |
+| 2 | GitReins guard | PASS | Tier 1: secrets clean, no Go files staged (full mode) |
+| 3 | Hilo graph | PASS | 480 edges across 68 files (3 languages); stats: 498 edges across 70 files. Stable — unchanged |
+| 4 | Tests | PASS | 9/9 packages, 0 failures (sequential mode) |
+| 5 | TODO/FIXME scan | CLEAN | 0 matches |
+| 6 | Deps check | OK | 6 outdated (same stable set: go-cmp v0.6→v0.7, demangle, go-isatty v0.0.23→v0.0.24, goldmark v1.4.13→v1.8.4, x/exp, x/telemetry) |
+| 7 | GitReins config | OK | Evaluator configured (deepseek-v4-flash, 10m, 0.2M/0.05M). **35/35 tasks complete**, 0 pending |
+| 8 | Secrets | CLEAN | gitleaks: clean (via GitReins guard — 5.67MB scanned) |
+| 9 | Static analysis (vet) | PASS | go vet clean, 0 issues |
+| 10 | Board consistency | SYNCED | Dual-source: 35/35 GitReins tasks complete, 0 pending. Board has only NEVER-DONE + E2E-001 |
+| 11 | Dispatch | IDLE — COOLDOWN DRIFT SAME DAEMON | **Cooldown found at 900s (was 43200s at tick #161, 09:23 UTC). SAME daemon PID 1320778** (started 09:04 UTC, 4h05m uptime). No restart since tick #161. Third consecutive confirmation of running-daemon drift. |
+
+|**COOLDOWN-DRIFT (tick #162):** |
+|- **Daemon:** PID 1320778, started 09:04 UTC, 4h05m uptime. SAME daemon as tick #161 (19m uptime at 09:23 UTC). |
+|- **Drift timeline:** Restored to 43200s at 09:23 UTC (tick #161). Found at 900s at 13:08 UTC (tick #162). Drift in ~3h45m on running daemon. |
+|- **Suspects ruled out:** ApplyFleetConfig (create-only, confirmed), autoSlowdown (case-sensitive VERDICT: confirmed no-op), daemon restart (same PID). |
+|- **Primary suspect:** MCP toolFleetSetCooldown — no audit logging for cooldown mutations. |
+|- **Cooldown restored:** 43200s via PUT API, verified via GET (`"CooldownS":43200`). |
+
+|**Fleet health snapshot:** |
+|- Daemon PID 1320778, 4h05m uptime, 4 active ticks, 158 exec spawns. DB connected, status OK. |
+
+|**NEVER-DONE 11-point audit (tick #162 — 2 ticks since #160, skip):** |
+|- Previous full audit at tick #160 (2026-07-26 05:35 UTC). No code changes since. All items unchanged. |
+|- Fresh verification: build PASS, tests PASS, vet PASS, lint PASS, gitleaks PASS, GitReins 35/35 PASS. |
+|- Next full audit due at tick #163 or #164. |
+
+|**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. Cooldown restored from 900→43200s — **THIRD consecutive confirmation of running-daemon drift** on same PID 1320778 without restart. MCP `toolFleetSetCooldown` remains primary suspect. Self-pause at 43200s. No actionable code work. Next NEVER-DONE audit at tick #163/164.
