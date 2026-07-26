@@ -596,8 +596,34 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 **Fleet health snapshot:**
 - 64 total projects (41 enabled, 23 disabled/test-dummy)
 - 8 active ticks, 10 exec spawns, 0 HTTP spawns
-- 2m31s uptime (daemon just restarted)
-- 7 projects at 900s cooldown (post-restart): Kobayashi-Maru, coding-hermes-scheduler, dexdat-core, duckbrain, eduos.dexdat.com.co, helios, off-by-one
-- Most others at 43200s
+| 2m31s uptime (daemon just restarted)
+|- 7 projects at 900s cooldown (post-restart): Kobayashi-Maru, coding-hermes-scheduler, dexdat-core, duckbrain, eduos.dexdat.com.co, helios, off-by-one
+|- Most others at 43200s
+|
+||**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. 11-point audit clean (no drift from prior audits). Cooldown restored from 900→43200s — post-daemon-restart drift (different from ticks #159→#160→#162→#163 which proved running-daemon drift on same PID). 7 projects at 900s post-restart is typical fleet-wide pattern. Self-pause at 43200s. No actionable code work.
 
-|**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. 11-point audit clean (no drift from prior audits). Cooldown restored from 900→43200s — post-daemon-restart drift (different from ticks #159→#160→#162→#163 which proved running-daemon drift on same PID). 7 projects at 900s post-restart is typical fleet-wide pattern. Self-pause at 43200s. No actionable code work.
+### Tick #165 — 2026-07-26 21:26 UTC (DeepSeek V4 Flash)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at 3b2d6e5, no uncommitted changes, up to date |
+| 2 | GitReins guard | PASS | Tier 1: secrets clean, no Go files staged. 35/35 tasks complete |
+| 3 | Hilo graph | PASS | 480 edges across 68 files (warm); stats: 498 edges across 70 files (3 languages). Stable |
+| 4 | Tests | PASS | 9/9 packages, 0 failures (cached) |
+| 5 | TODO/FIXME scan | CLEAN | 0 matches in .go files |
+| 6 | Deps check | OK | All deps within range — no outdated entries |
+| 7 | GitReins config | OK | Evaluator configured (deepseek-v4-flash, 10m, 0.2M/0.05M). 35/35 tasks complete, 0 pending |
+| 8 | Secrets | CLEAN | gitleaks: clean (via GitReins guard) |
+| 9 | Static analysis (vet) | PASS | go vet clean, 0 issues |
+| 10 | Board consistency | SYNCED | Dual-source: 35/35 GitReins tasks complete. Board has only NEVER-DONE + E2E-001 |
+| 11 | Dispatch | IDLE — COOLDOWN-DRIFT (RESTARTED DAEMON) | **Cooldown found at 900s** (was 43200s at tick #164). Daemon uptime 21m — restarted. **Restored to 43200s** via PUT API, verified via GET (`"CooldownS": 43200`, `"Enabled": true`). Scheduler healthy: 6 active ticks, 33 exec spawns. |
+
+**Fleet health snapshot:**
+- Daemon 21m uptime, 6 active ticks, 33 exec spawns, DB connected
+- 19 projects below 43200s cooldown (post-restart fleet-wide distribution)
+
+**NEVER-DONE 11-point audit (tick #165 — 1 tick since #164 full audit):**
+- Full audit ran at tick #164. No code changes since. All items unchanged.
+- Fresh verification: build PASS, tests PASS, vet PASS, lint PASS, gitleaks PASS, GitReins 35/35 PASS.
+
+**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. Cooldown restored from 900→43200s — standard post-daemon-restart drift. Self-pause at 43200s. No actionable code work.
