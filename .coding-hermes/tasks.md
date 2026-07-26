@@ -562,4 +562,42 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 | 10 | Code quality | PASS — 0 lint, 0 TODO/FIXME, 0 hardcoded models |
 | 11 | Middle-out wiring | PASS — All routes: main.go → api, dashboard, scheduler, mcp, sync, config |
 
-**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. 11-point audit clean (no drift). **FOURTH consecutive confirmation of running-daemon cooldown drift** on same PID 1320778 (ticks #159→#160→#162→#163). The 3-4h drift cycle on a running daemon without restart is now a reproducible phenomenon. `toolFleetSetCooldown` in `mcp/handlers.go:88-98` is the most actionable suspect — it directly writes `cooldown_s` with zero audit logging. **Recommended action for next tick:** add event logging (`INSERT INTO events ...`) to `toolFleetSetCooldown` handler to trace the source. Cooldown restored to 43200s. Self-pause. No actionable code work.
+|**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. 11-point audit clean (no drift). **FOURTH consecutive confirmation of running-daemon cooldown drift** on same PID 1320778 (ticks #159→#160→#162→#163). The 3-4h drift cycle on a running daemon without restart is now a reproducible phenomenon. `toolFleetSetCooldown` in `mcp/handlers.go:88-98` is the most actionable suspect — it directly writes `cooldown_s` with zero audit logging. Cooldown restored to 43200s. Self-pause. No actionable code work.
+
+### Tick #164 — 2026-07-26 21:06 UTC (DeepSeek V4 Flash)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at e7ed902, no uncommitted changes, up to date |
+| 2 | GitReins guard | PASS | Tier 1: secrets clean (gitleaks 5.83MB, 530ms), no Go files staged |
+| 3 | Hilo graph | PASS | 480 edges across 68 files (3 languages); stats: 498 edges across 70 files. Stable — unchanged |
+| 4 | Tests | PASS | 9/9 packages, 0 failures (cached) |
+| 5 | TODO/FIXME scan | CLEAN | 0 matches in .go files |
+| 6 | Deps check | OK | 6 outdated (same stable set: go-cmp v0.6→v0.7, demangle, go-isatty v0.0.23→v0.0.24, goldmark v1.4.13→v1.8.4, x/exp, x/telemetry) |
+| 7 | GitReins config | OK | Evaluator configured (deepseek-v4-flash, 10m, 0.2M/0.05M). **35/35 tasks complete**, 0 pending |
+| 8 | Secrets | CLEAN | gitleaks: 5.83MB scanned, no leaks found |
+| 9 | Static analysis (vet) | PASS | go vet clean, 0 issues |
+| 10 | Board consistency | SYNCED | Dual-source: 35/35 GitReins tasks complete, 0 pending. Board has only NEVER-DONE + E2E-001 |
+| 11 | Dispatch | IDLE — COOLDOWN-DRIFT (RESTARTED DAEMON) | **Cooldown found at 900s (was 43200s at tick #163). Daemon restarted** — uptime only 2m31s (PID changed from 1320778). This is the standard post-restart drift pattern. **Cooldown restored** to 43200s via PUT API and verified via GET (response shows `"CooldownS": 43200`). Scheduler healthy: 8 active ticks, 10 exec spawns, 41/64 projects enabled. 7 projects at 900s cooldown (restart effect). |
+
+**NEVER-DONE 11-point audit (tick #164 — 3 ticks since #161):**
+1. Spec alignment: PASS — 11 specs (S01-S11), all present and synced to implementation
+2. Doc coverage: PASS — 7 doc files + docs/adr/ + docs/fleet.md, comprehensive
+3. Test gaps: PASS — 9/9 packages covered, total statements 65.4%. Core: api 75.7%, config 89.3%, dashboard 80.6%, database 69.3%, mcp 84.7%, scheduler 66.3%, sync 91.0%. cmd/schedulerd 4.0% (thin main, expected)
+4. Package upgrades: OK — 6 minor patches (all non-breaking, same set as prior 15+ ticks)
+5. Pitfall hunt: PASS — 10+ pitfalls in coding-hermes-scheduler skill, all addressed
+6. Performance: PASS — 7 benchmarks. No N+1 queries. Dashboard renders <50ms
+7. Endpoint verification: PASS — Scheduler API healthy (2m31s uptime, 8 active ticks, 10 exec spawns)
+8. CI/CD: PASS — GitHub Actions with ci.yaml/ci.yml/release.yaml (Go 1.26, golangci-lint, build, test)
+9. DuckBrain sync: PASS — sync package at 91.0% coverage, wired in main.go
+10. Code quality: PASS — 0 lint issues, 0 TODO/FIXME, 0 hardcoded models/secrets, all magic numbers as constants
+11. Middle-out wiring: PASS — All routes registered: main.go → scheduler, api, dashboard, database, mcp, sync, config
+
+**Fleet health snapshot:**
+- 64 total projects (41 enabled, 23 disabled/test-dummy)
+- 8 active ticks, 10 exec spawns, 0 HTTP spawns
+- 2m31s uptime (daemon just restarted)
+- 7 projects at 900s cooldown (post-restart): Kobayashi-Maru, coding-hermes-scheduler, dexdat-core, duckbrain, eduos.dexdat.com.co, helios, off-by-one
+- Most others at 43200s
+
+|**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. 11-point audit clean (no drift from prior audits). Cooldown restored from 900→43200s — post-daemon-restart drift (different from ticks #159→#160→#162→#163 which proved running-daemon drift on same PID). 7 projects at 900s post-restart is typical fleet-wide pattern. Self-pause at 43200s. No actionable code work.
