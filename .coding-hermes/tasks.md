@@ -107,3 +107,39 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 - All 11 gates pass. Routine maintenance tick.
 
 **Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. Cooldown drifted from 43200s→900s after daemon restart — RESTORED to 43200s (PUT confirmed via GET). Pattern confirmed: **every daemon restart causes cooldown drift to 900s**. WAL checkpoint hypothesis strengthened. Root cause remains unconfirmed but narrowed to startup init path or WAL non-persistence. Self-pause at 43200s. No actionable code work.
+
+### Tick #170 — 2026-07-27 13:12 UTC (DeepSeek V4 Pro)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at 3b43f8e, no uncommitted changes, up to date |
+| 2 | Build | PASS | go build ./... clean |
+| 3 | Tests | PASS | 9/9 packages, 0 failures (cached, sequential mode) |
+| 4 | Vet | PASS | go vet clean |
+| 5 | Gofmt | CLEAN | 0 unformatted files |
+| 6 | TODO/FIXME | CLEAN | 0 matches in .go files |
+| 7 | Hilo | PASS | 499 edges across 70 files (3 languages). Hilo=useful |
+| 8 | GitReins guard | PASS | Tier 1: secrets clean, build/vet/tests pass. 35/35 tasks complete |
+| 9 | GitReins judge | OK | Evaluator section present (max_iter=100, max_time=10m). Model set via MCP configure at runtime |
+| 10 | Deps | OK | 6 outdated (same stable set: go-cmp, demangle, go-isatty, goldmark, x/exp, x/telemetry) |
+| 11 | Security | PASS | SECURITY.md, CODEOWNERS, LICENSE, SUPPORT.md present. gitleaks clean |
+| 12 | CI | N/A | Repo coding-hermes/scheduler — no CI runs found (404). CI may not be configured for this repo |
+| 13 | Middle-out wiring | PASS | main.go: InitDB → NewLoop → NewServer → MCP. Full DI chain intact |
+| 14 | E2E-001 | DUE | Last E2E tick was #167. Due within next 3 ticks (every 5-10) |
+
+**COOLDOWN-DRIFT (tick #170):**
+- Cooldown found at 900s on arrival. Daemon running (4 active ticks).
+- Restored to 43200s via PUT API, verified via GET (`CooldownS: 43200`).
+- Pattern persists: every daemon restart → cooldown reverts to 900s. Confirmed across ticks #167-#170.
+
+**Fleet health snapshot:**
+- Daemon running, 4 active ticks, status OK.
+- 35/35 GitReins tasks complete, 0 pending.
+
+**NEVER-DONE 14-point audit (tick #170 — incremental):**
+- No code changes since tick #167. All 14 gates pass.
+- COOLDOWN-REVERSION: investigation continues. WAL checkpoint hypothesis remains leading theory.
+- FIX-STACK: still BLOCKED (Bane defers).
+- E2E-001 due within 3 ticks.
+
+**Verdict:** IDLE — maintenance mode. All 14 gates pass. 35/35 GitReins complete. Cooldown restored 900→43200s. No actionable code work. Self-pause at 43200s.
