@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
 )
@@ -94,6 +95,14 @@ func (s *Server) toolFleetSetCooldown(ctx context.Context, args map[string]inter
 	if err := database.UpdateProject(ctx, s.db, name, database.ProjectUpdates{CooldownS: &c}); err != nil {
 		return "", err
 	}
+	// Log cooldown mutation for audit trail (COOLDOWN-REVERSION investigation).
+	_ = database.LogEvent(ctx, s.db, &database.Event{
+		Severity:  database.SeverityInfo,
+		Component: "mcp",
+		Message:   fmt.Sprintf("toolFleetSetCooldown: %s → %ds", name, c),
+		Details:   fmt.Sprintf(`{"cooldown_s":%d,"tool":"toolFleetSetCooldown"}`, c),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
 	return jsonString(map[string]string{"status": "updated", "project": name, "cooldown_s": strconv.Itoa(c)}), nil
 }
 
