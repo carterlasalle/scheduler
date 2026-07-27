@@ -672,3 +672,35 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 | 11 | Middle-out wiring | PASS — All routes: main.go → scheduler, api, dashboard, database, mcp, sync, config |
 
 **Verdict:** FIX — cooldown event logging implemented (52a0e8a). After 10+ ticks of investigation (ticks #159→#165), the recommended fix for COOLDOWN-REVERSION is now in place: `toolFleetSetCooldown` logs every mutation via `database.LogEvent()`. Next tick(s) should monitor the events table for unauthorized cooldown changes to identify the root cause of running-daemon drift. Cooldown restored 900→43200s. Self-pause. All other gates clean.
+
+### Tick #167 — 2026-07-27 05:14 UTC (DeepSeek V4 Flash)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at 528b1bf, no uncommitted changes, up to date |
+| 2 | GitReins guard | PASS | Tier 1: secrets clean, build/go_vet/tests all pass (full mode), 35/35 tasks complete |
+| 3 | Hilo graph | PASS | 481 edges across 68 files (3 languages); stats: 499 edges across 70 files. Stable — unchanged from prior ticks |
+| 4 | Tests | PASS | 9/9 packages, 0 failures (cached) |
+| 5 | TODO/FIXME scan | CLEAN | 0 matches in .go files |
+| 6 | Deps check | OK | 6 outdated (same stable set: go-cmp v0.6→v0.7, demangle, go-isatty v0.0.23→v0.0.24, goldmark v1.4.13→v1.8.4, x/exp, x/telemetry) |
+| 7 | GitReins config | OK | Evaluator configured (deepseek-v4-flash, 10m, 0.2M/0.05M). **35/35 tasks complete**, 0 pending, 0 in_progress. GitReins v0.8.2 installed (latest: 0.11.0) |
+| 8 | Secrets | CLEAN | gitleaks: 5.83MB scanned, no leaks found (via GitReins guard) |
+| 9 | Static analysis (vet + lint) | PASS | go vet clean, golangci-lint: 0 issues on Go 1.26.5 |
+| 10 | Board consistency | SYNCED | Dual-source: 35/35 GitReins tasks complete, 0 pending. Board has only NEVER-DONE + E2E-001 |
+| 11 | Dispatch | IDLE — COOLDOWN-DRIFT (RESTARTED DAEMON) | **Cooldown found at 900s** (was 43200s at tick #166). Daemon restarted (5m uptime vs ~14m at tick #166) — standard post-restart drift pattern. **Restored to 43200s** via PUT API (confirmed via response body: `"CooldownS":43200`). **Event logging verified in source** — `handlers.go:99-103` calls `database.LogEvent()` on every `toolFleetSetCooldown` mutation. **No MCP events logged yet** (daemon just restarted, 0 MCP component events in events table at `GET /api/v1/events?component=mcp`). Next tick(s) should monitor for MCP-triggered cooldown changes. |
+
+**COOLDOWN-DRIFT (tick #167):**
+- **Daemon:** New PID (restarted after tick #166), ~5m uptime. Standard post-restart drift.
+- **Event logging verified:** Source code at `handlers.go:89-103` confirms `LogEvent()` is called on every `toolFleetSetCooldown` mutation with project name, cooldown value, and tool name.
+- **No MCP events yet:** 0 events from `component=mcp` — the daemon running the new code hasn't had any MCP cooldown calls.
+- **Cooldown restored:** 43200s via PUT API (confirmed via response body).
+
+**Fleet health snapshot:**
+- Daemon ~5m uptime, 8 active ticks, 13 exec spawns, DB connected
+- Events table shows escalation alerts: 2 HIGH (hermes-canopy, rethinkdb — 5 consecutive failures each), 12 MEDIUM (starved projects: helios, uhlp, hermes-canopy, duckbrain, rethinkdb, bunker, off-by-one, Kobayashi-Maru, dexdat-core, eduos, coding-hermes-scheduler, h3)
+
+**NEVER-DONE 11-point audit (tick #167 — 1 tick since #166 full audit):**
+- Full audit ran at tick #166. No code changes since. All items unchanged.
+- Fresh verification: build PASS, tests PASS, vet PASS, lint PASS, gitleaks PASS, GitReins 35/35 PASS.
+
+**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. Cooldown restored from 900→43200s — standard post-daemon-restart drift. Event logging from tick #166 is confirmed in source and compiled but no MCP events have been recorded yet (daemon freshly restarted). Self-pause at 43200s. No actionable code work.
