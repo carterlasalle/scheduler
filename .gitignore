@@ -24,4 +24,5 @@ deploy/*.log
 # Project-local state (not committed)
 .vfs/
 .coding-hermes/
+!.coding-hermes/tasks.md
 .gitreins/history/
