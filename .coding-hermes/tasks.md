@@ -26,7 +26,7 @@
 # Coding Hermes Scheduler — Model Router Task Matrix
 
 > **Core purpose:** Cron-driven autonomous development loop scheduler — manages 63 projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet PASS. Tick #168 — IDLE. All 35/35 GitReins tasks complete, board has only NEVER-DONE + E2E-001. 11-gate audit clean. Cooldown restored from 900→43200s (daemon restarted). Event logging (52a0e8a) confirms 0 MCP toolFleetSetCooldown calls — ruling out MCP as the drift cause during this daemon's lifetime. Cooldown drift root cause remains unidentified.
+> **Status:** Build/test/lint/vet PASS. Tick #170 — IDLE. All 35/35 GitReins tasks complete, board has only NEVER-DONE + E2E-001. 14-gate audit clean. Cooldown restored from 900→43200s (daemon restart drift, 4th consecutive tick). COOLDOWN-REVERSION investigation: WAL checkpoint hypothesis remains leading theory. Self-pause at 43200s.
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
