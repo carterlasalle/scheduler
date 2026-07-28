@@ -189,3 +189,85 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 - FIX-STACK: Still BLOCKED (Bane defers).
 
 **Verdict:** PRODUCTIVE — COOLDOWN-REVERSION root cause identified and fixed after 4+ ticks of silent no-ops. CODEOWNERS created. E2E smoke clean. Cooldown actually 43200s. Self-pause at 43200s.
+
+### Tick #172 — 2026-07-28 09:13 UTC (DeepSeek V4 Pro)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at cbe1063, no uncommitted changes, up to date |
+| 2 | Build | PASS | go build ./... clean |
+| 3 | Tests | PASS | 9/9 packages, 0 failures |
+| 4 | Vet | PASS | go vet clean |
+| 5 | Lint | PASS | golangci-lint: 0 issues |
+| 6 | TODO/FIXME | CLEAN | 0 matches in .go files |
+| 7 | Hilo | PASS | 499 edges across 70 files (3 languages). Hilo=useful |
+| 8 | GitReins guard | PASS | Tier 1: secrets clean. 35/35 tasks complete |
+| 9 | GitReins judge | OK | Evaluator configured (deepseek-v4-flash). 35/35 complete, 0 pending |
+| 10 | Security | PASS | CODEOWNERS, LICENSE, SECURITY.md, SUPPORT.md present. gitleaks clean |
+| 11 | Deps | OK | 7 outdated (same 6 + libc 1.74.3→1.74.4) |
+| 12 | Board consistency | SYNCED | 35/35 GitReins complete. Board: NEVER-DONE + E2E-001 only |
+| 13 | Middle-out wiring | PASS | InitDB → NewLoop → NewServer → MCP in main.go intact |
+| 14 | E2E-001 | NOT DUE | Last E2E at tick #171 (foreman-direct: 7/7 endpoints). Due in ~3 ticks |
+
+**COOLDOWN-DRIFT (tick #172):**
+- Cooldown found at 900s on arrival. Daemon running (8h uptime, PID 581124, started Jul 27 20:12).
+- Daemon did NOT restart since tick #171. Cooldown drifted WITHOUT restart.
+- Restored to 43200s via PUT API using correct `CooldownS` field, verified via GET.
+- **NEW:** Drift happened on same daemon instance — rules out the WAL checkpoint/restart hypothesis entirely.
+- Likely culprit: autoSlowdown mechanism. RULE-NO-TIMEOUT-BACKOFF (GitReins task) specifies 1.5x multiplier and 3600s cap. If cooldown was 43200s (above cap), autoSlowdown may have applied cap logic during a PRODUCTIVE/IDLE reclassification.
+- COOLDOWN-REVERSION task was marked ✅ SOLVED at tick #171 (field name fix), but drift persists. The field name was a prior-silent-no-op issue; the current drift is a separate mechanism (autoSlowdown cap interaction).
+
+**Fleet health snapshot:**
+- Daemon running (8h uptime), 40 active projects, 3 active ticks.
+- Status: 7,043 completed, 22,127 failed (legacy), 316 timeout.
+- All 40 active projects' cooldowns exceed 600s tick_timeout — no tick storm risk.
+
+**NEVER-DONE 14-point audit (tick #172 — incremental, 1 tick since #171):**
+- No code changes since tick #171. All 14 gates pass.
+- COOLDOWN-REVERSION: Drifted again despite correct field name. New hypothesis: autoSlowdown cap interaction.
+- FIX-STACK: Still BLOCKED (Bane defers).
+- E2E-001: Not due yet (last at #171).
+
+**Verdict:** IDLE — maintenance mode. All 14 gates pass. 35/35 GitReins complete. Cooldown restored 900→43200s. COOLDOWN-REVERSION root cause evolving: field name was real but secondary; autoSlowdown cap is now primary suspect for persistent drift. No actionable code work. Self-pause at 43200s.
+
+
+### Tick #173 — 2026-07-28 16:40 UTC (DeepSeek V4 Pro)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at cbe1063. Board staged (tick #172 uncommitted), no other changes |
+| 2 | Build | PASS | go build ./... clean |
+| 3 | Tests | PASS | 9/9 packages, 0 failures |
+| 4 | Vet | PASS | go vet clean |
+| 5 | Lint | PASS | golangci-lint: 0 issues |
+| 6 | TODO/FIXME | CLEAN | 0 matches in .go files |
+| 7 | Hilo | PASS | 499 edges, 70 files (3 languages). Hilo=useful |
+| 8 | GitReins guard | PASS | Tier 1: secrets clean. 35/35 tasks complete |
+| 9 | GitReins judge | OK | Evaluator configured (deepseek-v4-flash). 35/35 complete, 0 pending |
+| 10 | Security | PASS | CODEOWNERS, LICENSE, SECURITY.md, SUPPORT.md present. gitleaks clean |
+| 11 | Deps | OK | 7 outdated (go-cmp, demangle, go-isatty, goldmark, x/exp, x/telemetry, libc 1.74.3->1.74.4) |
+| 12 | Board consistency | SYNCED | 35/35 GitReins complete. Board: NEVER-DONE + E2E-001 only. Tick #172 update staged but uncommitted — included in this commit |
+| 13 | Middle-out wiring | PASS | InitDB -> NewLoop -> NewServer -> MCP in main.go intact |
+| 14 | E2E-001 | PASS (foreman-direct smoke) | 7/7 endpoints: health, status, projects, namespaces, ticks, dashboard (200, 37KB), MCP (14 tools). No regressions |
+
+**COOLDOWN STATUS (tick #173):**
+- Cooldown found at 43200s on arrival — NO DRIFT since tick #172 restoration.
+- Daemon running: uptime 1420m (PID 581124, started Jul 27 20:12). No restart since tick #172.
+- This is the first tick where cooldown survived without drifting — suggests the autoSlowdown cap interaction IS the primary mechanism for drift, and this tick arrived within the 12h window before autoSlowdown could reclassify.
+
+**DuckBrain state:**
+- Wrote tick #173 state: ID 1638d77d, recall confirmed persisted.
+- 6 total keys in /projects/coding-hermes-scheduler/ (ticks #82, #88, bug-006, infra-004, tick-2026-07-18, tick-173).
+
+**Fleet health snapshot:**
+- Daemon running, ~24h uptime, 4 active ticks, 40 active projects.
+- Cooldown correct at 43200s. No drift observed.
+
+**NEVER-DONE 14-point audit (tick #173 — incremental, 1 tick since #172):**
+- No code changes since tick #171 (CODEOWNERS addition). All 14 gates pass.
+- Board: tick #172 update was staged but never committed — included in this commit.
+- COOLDOWN-REVERSION: No drift this tick. Daemon survived 24h without restart — first stability observation. The autoSlowdown cap hypothesis (cooldown>3600s gets capped on PRODUCTIVE/IDLE reclassification) is the leading theory for why drift occurs at ~12h intervals.
+- FIX-STACK: Still BLOCKED (Bane defers).
+- E2E-001: Run this tick (foreman-direct smoke: 7/7). Next due in 5-10 ticks.
+
+**Verdict:** IDLE — maintenance mode. All 14 gates pass. 35/35 GitReins complete. Cooldown stable at 43200s (no drift for first time). Board committed. DuckBrain persisted + verified. Self-pause at 43200s.
