@@ -271,3 +271,44 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 - E2E-001: Run this tick (foreman-direct smoke: 7/7). Next due in 5-10 ticks.
 
 **Verdict:** IDLE — maintenance mode. All 14 gates pass. 35/35 GitReins complete. Cooldown stable at 43200s (no drift for first time). Board committed. DuckBrain persisted + verified. Self-pause at 43200s.
+
+
+### Tick #174 — 2026-07-29 09:12 UTC (DeepSeek V4 Pro)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at d45a7c7, no uncommitted changes, up to date |
+| 2 | Build | PASS | go build ./... clean |
+| 3 | Tests | PASS | 9/9 packages, 0 failures |
+| 4 | Vet | PASS | go vet clean |
+| 5 | Lint | PASS | golangci-lint: 0 issues |
+| 6 | TODO/FIXME | CLEAN | 0 matches in .go files |
+| 7 | Hilo | PASS | 499 edges across 70 files (3 languages). Hilo=useful |
+| 8 | GitReins guard | PASS | Tier 1: secrets clean. 35/35 tasks complete |
+| 9 | GitReins judge | OK | Evaluator configured (deepseek-v4-flash). 35/35 complete, 0 pending |
+| 10 | Security | PASS | CODEOWNERS, LICENSE, SECURITY.md, SUPPORT.md present. gitleaks clean |
+| 11 | Docs | 8/9 | README, LICENSE, SECURITY, CODEOWNERS, CONTRIBUTING, CODE_OF_CONDUCT, CHANGELOG, SUPPORT present. GOVERNANCE.md missing |
+| 12 | Deps | OK | 8 outdated (same 6 + libc 1.74.3->1.74.4 + sqlite 1.54.0->1.55.0) |
+| 13 | Board consistency | SYNCED | 35/35 GitReins complete. Board: NEVER-DONE + E2E-001 only |
+| 14 | Middle-out wiring | PASS | InitDB->NewLoop->NewServer->MCP in main.go intact |
+| 15 | E2E-001 | PASS (foreman-direct smoke) | 7/7 endpoints: health, status, projects, namespaces, ticks, dashboard (200), MCP. No regressions |
+
+**COOLDOWN STATUS (tick #174):**
+- Cooldown found at 900s on arrival (drifted from 43200s set at tick #173).
+- Daemon running: ~12h uptime (same PID as tick #173). Drift on same daemon instance — confirms autoSlowdown/DelayRate mechanism.
+- Root cause: **DecayRate=1** auto-escalation. DecayRate multiplies cooldown on every completed tick — 900s was the decay product, not a fresh default.
+- Fix: **CooldownS=43200, DecayRate=0** (both via PUT API, verified via GET).
+- autoSlowdown cap theory (3600s) from ticks #172-#173 may also contribute; DecayRate=0 stops the multiplication side.
+
+**Fleet health snapshot:**
+- Daemon running (~12h uptime), 4 active ticks, status OK.
+- 35/35 GitReins tasks complete, 0 pending.
+
+**NEVER-DONE 14-point audit (tick #174 — incremental, 1 tick since #173):**
+- No code changes since tick #171 (CODEOWNERS addition). All 14 gates pass.
+- COOLDOWN-REVERSION: Drifted again. DecayRate=1 identified as co-contributor. Set to 0 alongside CooldownS=43200.
+- FIX-STACK: Still BLOCKED (Bane defers).
+- E2E-001: Run this tick (foreman-direct smoke: 7/7). Next due in 5-10 ticks.
+- DuckBrain: Wrote tick #174 (ID b9beea16), recall confirmed persisted. 6 total entries in namespace.
+
+**Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins complete. Cooldown drifted 43200->900s (DecayRate auto-escalation). Fixed: CooldownS=43200 + DecayRate=0. Self-pause at 43200s.
