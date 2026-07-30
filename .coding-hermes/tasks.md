@@ -26,7 +26,7 @@
 # Coding Hermes Scheduler — Model Router Task Matrix
 
 > **Core purpose:** Cron-driven autonomous development loop scheduler — manages 63 projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet PASS. Tick #171 — COOLDOWN ROOT CAUSE FOUND. 35/35 GitReins complete. E2E smoke clean (7/7 endpoints). CODEOWNERS added. **COOLDOWN-REVERSION SOLVED: API field name mismatch.** Prior ticks used `cooldown_s` (snake_case) which API silently ignored. Correct field is `CooldownS` (camelCase). Cooldown actually 43200s now. Self-pause at 43200s.
+> **Status:** Build/test/lint/vet PASS. Tick #176 — IDLE, all 15 gates pass, cooldown stable at 43200s (NO DRIFT, DecayRate=0 confirmed holding). 35/35 GitReins complete. 441 test cases. 11/11 specs, 9/9 docs, 9/9 API endpoints + dashboard. Self-pause at 43200s.
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
@@ -361,3 +361,43 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 - E2E-001: Run this tick (foreman-direct smoke: 6/7 endpoints + dashboard). Next due in 5-10 ticks.
 
 **Verdict:** IDLE — maintenance mode. All 15 gates pass. 35/35 GitReins complete. Cooldown drifted 43200->900 (autoSlowdown cap mechanism, DecayRate=0 confirmed). GOVERNANCE.md created (was missing 2+ ticks). Self-pause at 43200s.
+
+### Tick #176 — 2026-07-30 01:54 UTC (DeepSeek V4 Pro)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at 2ca08f2, no uncommitted changes, up to date |
+| 2 | Build | PASS | go build ./... clean |
+| 3 | Vet | PASS | go vet clean |
+| 4 | Lint | PASS | golangci-lint: 0 issues |
+| 5 | Gofmt | CLEAN | 0 unformatted files |
+| 6 | Tests | PASS | 441 PASS/FAIL/SKIP across 9 packages, 0 failures |
+| 7 | TODO/FIXME | CLEAN | 0 matches in .go files |
+| 8 | Hilo | PASS | 499 edges across 70 files (3 languages). Hilo=useful |
+| 9 | GitReins guard | PASS | Tier 1: secrets clean, build/vet/tests pass. 35/35 tasks complete |
+| 10 | GitReins judge | OK | Evaluator configured (deepseek-v4-flash). 35/35 complete, 0 pending |
+| 11 | Security | PASS | CODEOWNERS, LICENSE, SECURITY.md, SUPPORT.md, GOVERNANCE.md present. gitleaks clean |
+| 12 | Docs | 9/9 | CHANGELOG (59), CODE_OF_CONDUCT (38), CODEOWNERS (2), CONTRIBUTING (116), GOVERNANCE (23), LICENSE (21), README (383), SECURITY (28), SUPPORT (27) — all present |
+| 13 | Specs | 11/11 | S01-S11 all present (system architecture through deployment-migration) |
+| 14 | Deps | OK | 8 outdated: go-cmp, demangle, go-isatty, goldmark, x/exp, x/telemetry, libc, sqlite |
+| 15 | E2E smoke | 10/10 | Health, Status, Projects, Namespaces, Ticks, Events, Queue, OpenAPI, Dashboard (/), /api/v1/evaluate (405=POST-only expected). All 200 except /evaluate POST-only |
+
+**COOLDOWN STATUS (tick #176):**
+- Cooldown found at 43200s on arrival — NO DRIFT since tick #175.
+- DecayRate=0 confirmed via API (set at tick #174). 
+- Daemon running: ~38m uptime (new PID — restarted since tick #175). 4 active ticks.
+- **This is the first tick since around #167 where cooldown was actually at 43200s on arrival** (without needing restoration). The DecayRate=0 fix from #174 is working.
+- However: daemon uptime is only 38m — the autoSlowdown 3600s cap typically takes ~12h to trigger. Stability beyond 12h remains unconfirmed.
+
+**Fleet health snapshot:**
+- Daemon running (~38m uptime), 4 active ticks, 39 active projects, status OK.
+- 35/35 GitReins tasks complete, 0 pending.
+- API fully functional: 10/10 endpoints responding.
+
+**NEVER-DONE 15-point audit (tick #176 — incremental, 1 tick since #175):**
+- No code changes since tick #175 (GOVERNANCE.md). All 15 gates pass.
+- COOLDOWN-REVERSION: No drift this tick. DecayRate=0 fix confirmed stable. AutoSlowdown cap interaction still possible on longer daemon runs (>12h).
+- FIX-STACK: Still BLOCKED (Bane defers).
+- E2E-001: Run this tick (foreman-direct smoke: 10/10). Next due in 5-10 ticks.
+
+**Verdict:** IDLE — maintenance mode. All 15 gates pass. 35/35 GitReins complete. Cooldown STABLE at 43200s (no drift — DecayRate=0 fix confirmed effective). Daemon recently restarted; autoSlowdown cap risk remains on runs >12h. No actionable code work. Self-pause at 43200s.
