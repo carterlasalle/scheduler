@@ -111,6 +111,15 @@ func main() {
 		loop.SetSimulation(*simSuccess)
 	}
 
+	// Load blackout windows from scheduler config (same TOML as fleet config).
+	if *configFile != "" {
+		rootCfg, err := config.LoadRootConfig(*configFile)
+		if err == nil && len(rootCfg.Scheduler.BlackoutWindows) > 0 {
+			loop.SetBlackoutWindows(rootCfg.Scheduler.BlackoutWindows)
+			log.Printf("Blackout: loaded %d windows", len(rootCfg.Scheduler.BlackoutWindows))
+		}
+	}
+
 	// Wire gateway HTTP client with retry (FEAT-003).
 	if *gatewayURL != "" && *gatewayKey != "" {
 		gwClient := scheduler.NewGatewayClient(*gatewayURL, *gatewayKey, *tickTimeout)

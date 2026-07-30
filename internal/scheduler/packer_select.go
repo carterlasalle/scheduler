@@ -4,6 +4,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/coding-herms/scheduler/internal/config"
 	"github.com/coding-herms/scheduler/internal/database"
 )
 
@@ -129,9 +130,13 @@ func (m *MultiPoolPacker) Pack(
 		for i := range scored {
 			pu := &scored[i]
 
-			// Cooldown check.
+			// Cooldown check with blackout slowdown.
 			if lt, ok := lastCompleted[pu.Project.Name]; ok {
 				cooldownDur := time.Duration(pu.Project.CooldownS) * time.Second
+				// Apply blackout slowdown if inside a peak-pricing window.
+				if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout && mult > 1.0 {
+					cooldownDur = time.Duration(float64(cooldownDur) * mult)
+				}
 				if now.Sub(lt) < cooldownDur {
 					continue
 				}
@@ -159,6 +164,10 @@ func (m *MultiPoolPacker) Pack(
 				// Check if it was skipped by cooldown — those are NOT queued.
 				if lt, ok := lastCompleted[pu.Project.Name]; ok {
 					cooldownDur := time.Duration(pu.Project.CooldownS) * time.Second
+					// Apply blackout slowdown if inside a peak-pricing window.
+					if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout && mult > 1.0 {
+						cooldownDur = time.Duration(float64(cooldownDur) * mult)
+					}
 					if now.Sub(lt) < cooldownDur {
 						continue // cooldown-skip, not queued
 					}

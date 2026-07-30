@@ -11,6 +11,12 @@
 // (lowest → highest): TOML config file < SCHEDULER_* env vars < CLI flags.
 package config
 
+import (
+	"strconv"
+	"strings"
+	"time"
+)
+
 // Default model and provider names used as fallbacks when no value is
 // specified in TOML, environment variables, or CLI flags.
 const (
@@ -38,17 +44,62 @@ type DaemonConfig struct {
 }
 
 // SchedulerConfig covers the scheduling core: interval ladder, weight
-// budget, concurrency cap, tick timeout, and the namespace-mode toggle.
+// budget, concurrency cap, tick timeout, namespace-mode toggle, and
+// blackout windows for peak-pricing slowdown.
 // MinInterval/MaxInterval/TickTimeout are stored as duration strings
 // (e.g. "20m", "24h", "2h") and parsed with time.ParseDuration by callers.
 type SchedulerConfig struct {
-	MinInterval   string `toml:"min_interval"`
-	MaxInterval   string `toml:"max_interval"`
-	NumLevels     int    `toml:"num_levels"`
-	WeightBudget  int    `toml:"weight_budget"`
-	MaxConcurrent int    `toml:"max_concurrent"`
-	TickTimeout   string `toml:"tick_timeout"`
-	NamespaceMode bool   `toml:"namespace_mode"`
+	MinInterval     string           `toml:"min_interval"`
+	MaxInterval     string           `toml:"max_interval"`
+	NumLevels       int              `toml:"num_levels"`
+	WeightBudget    int              `toml:"weight_budget"`
+	MaxConcurrent   int              `toml:"max_concurrent"`
+	TickTimeout     string           `toml:"tick_timeout"`
+	NamespaceMode   bool             `toml:"namespace_mode"`
+	BlackoutWindows []BlackoutWindow `toml:"blackout_windows"`
+}
+
+// BlackoutWindow defines a peak-pricing window during which the scheduler
+// applies a cooldown multiplier to reduce API costs. All times are UTC.
+// If Multiplier <= 0, the project is not spawned during this window.
+//
+// Example: DeepSeek peak hours 01:00-04:00 and 06:00-10:00 UTC at 2x price.
+type BlackoutWindow struct {
+	Start      string  `toml:"start"`      // "HH:MM" in UTC (e.g. "01:00")
+	End        string  `toml:"end"`        // "HH:MM" in UTC (e.g. "04:00")
+	Multiplier float64 `toml:"multiplier"` // e.g. 2.0 = double cooldown, 0 = skip entirely
+}
+
+// ActiveMultiplier returns the slowdown multiplier for the given time.
+// Returns 1.0 (no slowdown) if now is not inside any blackout window.
+// Returns 0 if Multiplier <= 0 (skip/project blackout).
+func ActiveMultiplier(windows []BlackoutWindow, now time.Time) (float64, bool) {
+	for _, w := range windows {
+		startH, startM := parseHM(w.Start)
+		endH, endM := parseHM(w.End)
+		start := time.Date(now.Year(), now.Month(), now.Day(), startH, startM, 0, 0, time.UTC)
+		end := time.Date(now.Year(), now.Month(), now.Day(), endH, endM, 0, 0, time.UTC)
+		if end.Before(start) || end.Equal(start) {
+			end = end.Add(24 * time.Hour) // overnight window
+		}
+		if (now.After(start) || now.Equal(start)) && now.Before(end) {
+			if w.Multiplier <= 0 {
+				return 0, false // skip entirely
+			}
+			return w.Multiplier, true
+		}
+	}
+	return 1.0, false
+}
+
+func parseHM(s string) (int, int) {
+	parts := strings.SplitN(s, ":", 2)
+	h, _ := strconv.Atoi(parts[0])
+	m := 0
+	if len(parts) > 1 {
+		m, _ = strconv.Atoi(parts[1])
+	}
+	return h, m
 }
 
 // GatewayConfig covers the Hermes gateway HTTP API used to spawn foreman

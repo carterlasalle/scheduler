@@ -28,7 +28,7 @@ func TestSimSetupDebug(t *testing.T) {
 	t.Logf("DB has %d running ticks", count)
 
 	calc := NewUrgencyCalculator(5*time.Minute, 4*time.Hour, 10)
-	packer := NewPacker(db, calc, 100, 8)
+	packer := NewPacker(db, calc, 100, 8, nil)
 
 	// Check what urgency looks like for two projects.
 	now := time.Now()

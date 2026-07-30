@@ -75,7 +75,7 @@ func TestMultiPoolPacker_FlatFallback(t *testing.T) {
 		t.Fatalf("ListProjects: %v", err)
 	}
 
-	mp := scheduler.NewMultiPoolPacker(100, 10)
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
 	now := time.Now()
 
 	// No namespaces → Pack returns empty Projects.
@@ -101,7 +101,7 @@ func TestMultiPoolPacker_FlatFallback(t *testing.T) {
 func TestMultiPoolPacker_EmptyNamespaces(t *testing.T) {
 	db := newTestDB(t)
 
-	mp := scheduler.NewMultiPoolPacker(100, 10)
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
 	now := time.Now()
 
 	result := mp.Pack(nil, []database.Namespace{}, defaultUrgencyCalc(), nil, nil, now)
@@ -133,7 +133,7 @@ func TestMultiPoolPacker_UnassignedProjects(t *testing.T) {
 		t.Fatalf("ListNamespaces: %v", err)
 	}
 
-	mp := scheduler.NewMultiPoolPacker(100, 10)
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
 	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), nil, nil, time.Now())
 
 	if len(result.Projects) != 0 {
@@ -160,7 +160,7 @@ func TestMultiPoolPacker_DisabledNamespace(t *testing.T) {
 		t.Fatalf("ListNamespaces: %v", err)
 	}
 
-	mp := scheduler.NewMultiPoolPacker(100, 10)
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
 	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), nil, nil, time.Now())
 
 	// Only job-a should be selected (disabled namespace excluded).
@@ -196,7 +196,7 @@ func TestMultiPoolPacker_BasicPacking(t *testing.T) {
 		t.Fatalf("ListNamespaces: %v", err)
 	}
 
-	mp := scheduler.NewMultiPoolPacker(100, 10)
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
 	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), nil, nil, time.Now())
 
 	if len(result.Projects) != 3 {
@@ -263,7 +263,7 @@ func TestMultiPoolPacker_CooldownRespected(t *testing.T) {
 
 	lastCompleted := map[string]time.Time{"cooling": now}
 
-	mp := scheduler.NewMultiPoolPacker(100, 10)
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
 	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), lastCompleted, nil, now)
 
 	if len(result.Projects) != 0 {
@@ -289,7 +289,7 @@ func TestMultiPoolPacker_UnknownDeadlines(t *testing.T) {
 		t.Fatalf("ListNamespaces: %v", err)
 	}
 
-	mp := scheduler.NewMultiPoolPacker(100, 10)
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
 	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), nil, nil, time.Now())
 
 	found := false
@@ -330,7 +330,7 @@ func TestMultiPoolPacker_BudgetExceeded(t *testing.T) {
 		t.Fatalf("ListNamespaces: %v", err)
 	}
 
-	mp := scheduler.NewMultiPoolPacker(100, 10)
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
 	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), nil, nil, time.Now())
 
 	// ns-a has alloc=2 (reserved=2, weight=1/100 → remainder*0.01 ≈ 0).
@@ -368,7 +368,7 @@ func TestMultiPoolPacker_ConcurrencyCap(t *testing.T) {
 	}
 
 	// maxConcurrent=3 across ALL namespaces.
-	mp := scheduler.NewMultiPoolPacker(100, 3)
+	mp := scheduler.NewMultiPoolPacker(100, 3, nil)
 	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), nil, nil, time.Now())
 
 	if len(result.Projects) > 3 {
@@ -396,7 +396,7 @@ func TestMultiPoolPacker_RunningProjectsCounted(t *testing.T) {
 	}
 
 	// maxConcurrent=5, but 2 already running → only 3 more can start.
-	mp := scheduler.NewMultiPoolPacker(100, 5)
+	mp := scheduler.NewMultiPoolPacker(100, 5, nil)
 	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), nil,
 		[]string{"p1", "p2"}, time.Now())
 
