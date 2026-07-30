@@ -5,6 +5,8 @@ import (
 	"log"
 	"sort"
 	"time"
+
+	"github.com/coding-herms/scheduler/internal/config"
 )
 
 // PackedProject is a project selected to run in this tick.
@@ -25,15 +27,16 @@ type PackedProject struct {
 
 // Packer selects which projects run given a weight budget and running set.
 type Packer struct {
-	db            *sql.DB
-	calculator    *UrgencyCalculator
-	budget        int
-	maxConcurrent int
+	db              *sql.DB
+	calculator      *UrgencyCalculator
+	budget          int
+	maxConcurrent   int
+	blackoutWindows []config.BlackoutWindow
 }
 
 // NewPacker creates a packer with the given budget and concurrency cap.
-func NewPacker(db *sql.DB, calc *UrgencyCalculator, budget, maxConcurrent int) *Packer {
-	return &Packer{db: db, calculator: calc, budget: budget, maxConcurrent: maxConcurrent}
+func NewPacker(db *sql.DB, calc *UrgencyCalculator, budget, maxConcurrent int, blackoutWindows []config.BlackoutWindow) *Packer {
+	return &Packer{db: db, calculator: calc, budget: budget, maxConcurrent: maxConcurrent, blackoutWindows: blackoutWindows}
 }
 
 // scored is a project with its computed urgency.
@@ -164,6 +167,10 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		if s.cooldownS == 0 {
 			// Dynamic: derive from priority via urgency calculator.
 			cooldownDur = p.calculator.ComputeInterval(s.priority)
+		}
+		// Apply blackout slowdown if inside a peak-pricing window.
+		if mult, inBlackout := config.ActiveMultiplier(p.blackoutWindows, now); inBlackout && mult > 1.0 {
+			cooldownDur = time.Duration(float64(cooldownDur) * mult)
 		}
 		if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {
 			totalSkippedCooldown++

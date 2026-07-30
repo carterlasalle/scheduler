@@ -351,6 +351,22 @@ func LoadFleetConfig(path string) (*FleetConfig, error) {
 	return &cfg, nil
 }
 
+// LoadRootConfig reads and validates a TOML file into a RootConfig.
+// The same file may also contain fleet declarations alongside scheduler
+// config sections (blackout windows, etc.). Unlike LoadFleetConfig,
+// this function does not validate project/namespace fields — call
+// ApplyFleetConfig separately with AsFleet() for that.
+func LoadRootConfig(path string) (*RootConfig, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("stat config %s: %w", path, err)
+	}
+	var cfg RootConfig
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		return nil, fmt.Errorf("decode config %s: %w", path, err)
+	}
+	return &cfg, nil
+}
+
 // ApplyFleetConfig seeds the namespaces and projects defined in cfg into db.
 // Rows that already exist are left untouched — this is a create-only upsert,
 // never an overwrite, so operator-made tweaks survive restarts.

@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/coding-herms/scheduler/internal/config"
 )
 
 // Loop runs the main evaluation cycle.
@@ -52,8 +54,8 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	}
 	return &Loop{
 		calculator:      calc,
-		packer:          NewPacker(db, calc, budget, maxConcur),
-		multiPoolPacker: NewMultiPoolPacker(budget, maxConcur),
+		packer:          NewPacker(db, calc, budget, maxConcur, nil),
+		multiPoolPacker: NewMultiPoolPacker(budget, maxConcur, nil),
 		spawner:         NewSpawner(db, maxConcur),
 		simSpawner:      NewSimSpawner(db, 0.85),
 		lifecycle:       NewLifecycleTracker(db),
@@ -79,6 +81,12 @@ func (l *Loop) SetNamespaceMode(on bool) {
 // SetGatewayClient wires the HTTP gateway client into the spawner (FEAT-003).
 func (l *Loop) SetGatewayClient(client *GatewayClient) {
 	l.spawner.SetGatewayClient(client)
+}
+
+// SetBlackoutWindows updates the blackout slowdown windows on both packers.
+func (l *Loop) SetBlackoutWindows(windows []config.BlackoutWindow) {
+	l.packer.blackoutWindows = windows
+	l.multiPoolPacker.blackoutWindows = windows
 }
 
 // SetForemanHome overrides the default HERMES_HOME for foreman sessions.

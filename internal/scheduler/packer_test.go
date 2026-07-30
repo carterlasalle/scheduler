@@ -48,7 +48,7 @@ func mustCreateProjectAt(t *testing.T, db *sql.DB, name string, weight, priority
 func TestNewPacker_StoresBudget(t *testing.T) {
 	db := newTestDB(t)
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
-	p := scheduler.NewPacker(db, calc, 50, 5)
+	p := scheduler.NewPacker(db, calc, 50, 5, nil)
 
 	if p.Budget() != 50 {
 		t.Errorf("Budget() = %d, want 50", p.Budget())
@@ -59,7 +59,7 @@ func TestNewPacker_StoresBudget(t *testing.T) {
 func TestPick_EmptyDatabase(t *testing.T) {
 	db := newTestDB(t)
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
-	p := scheduler.NewPacker(db, calc, 100, 5)
+	p := scheduler.NewPacker(db, calc, 100, 5, nil)
 
 	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
@@ -82,7 +82,7 @@ func TestPick_RespectsBudget(t *testing.T) {
 	}
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
-	p := scheduler.NewPacker(db, calc, 100, 10)
+	p := scheduler.NewPacker(db, calc, 100, 10, nil)
 	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
@@ -114,7 +114,7 @@ func TestPick_SkipsDisabled(t *testing.T) {
 	}
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
-	p := scheduler.NewPacker(db, calc, 100, 10)
+	p := scheduler.NewPacker(db, calc, 100, 10, nil)
 	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
@@ -142,7 +142,7 @@ func TestPick_SortedByUrgency(t *testing.T) {
 	}
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
-	p := scheduler.NewPacker(db, calc, 100, 10)
+	p := scheduler.NewPacker(db, calc, 100, 10, nil)
 	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
@@ -171,7 +171,7 @@ func TestPick_RespectsCooldown(t *testing.T) {
 	}
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
-	p := scheduler.NewPacker(db, calc, 100, 10)
+	p := scheduler.NewPacker(db, calc, 100, 10, nil)
 	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
@@ -194,7 +194,7 @@ func TestPick_RespectsMaxConcurrent(t *testing.T) {
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
 	// maxConcurrent=2, budget=100 → packer should pick at most 2.
-	p := scheduler.NewPacker(db, calc, 100, 2)
+	p := scheduler.NewPacker(db, calc, 100, 2, nil)
 	got, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
@@ -230,7 +230,7 @@ func benchPackerDB(b *testing.B, n int) (*sql.DB, *scheduler.Packer, time.Time) 
 	// Budget sized so roughly half of n projects fit; budget > total so all fit
 	// is also realistic — use a generous budget that exercises the sort + scan
 	// paths but still hits the early-break when maxConcurrent is low.
-	p := scheduler.NewPacker(db, calc, n*5, n)
+	p := scheduler.NewPacker(db, calc, n*5, n, nil)
 	return db, p, time.Now()
 }
 
@@ -294,7 +294,7 @@ func TestPick_PopulatesFields(t *testing.T) {
 	}
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
-	packer := scheduler.NewPacker(db, calc, 100, 10)
+	packer := scheduler.NewPacker(db, calc, 100, 10, nil)
 	got, err := packer.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
@@ -328,7 +328,7 @@ func TestPick_PopulatesFields(t *testing.T) {
 func TestListEnabled_Empty(t *testing.T) {
 	db := newTestDB(t)
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
-	p := scheduler.NewPacker(db, calc, 100, 5)
+	p := scheduler.NewPacker(db, calc, 100, 5, nil)
 
 	got, err := p.ListEnabled(context.Background())
 	if err != nil {
@@ -345,7 +345,7 @@ func TestListEnabled_WithProjects(t *testing.T) {
 	mustCreateProjectAt(t, db, "beta", 20, 7, 0, 1.5)
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
-	p := scheduler.NewPacker(db, calc, 100, 5)
+	p := scheduler.NewPacker(db, calc, 100, 5, nil)
 
 	got, err := p.ListEnabled(context.Background())
 	if err != nil {
@@ -407,7 +407,7 @@ func TestListEnabled_SkipsDisabled(t *testing.T) {
 	mustCreateProjectAt(t, db, "enabled", 5, 3, 0, 1.0)
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
-	p := scheduler.NewPacker(db, calc, 100, 5)
+	p := scheduler.NewPacker(db, calc, 100, 5, nil)
 
 	got, err := p.ListEnabled(context.Background())
 	if err != nil {

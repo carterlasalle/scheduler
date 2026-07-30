@@ -108,7 +108,7 @@ func TestPick_TieBreakingSameUrgency(t *testing.T) {
 		mustCreateProjectAt(t, db, p.Name, p.Weight, p.Priority, p.CooldownS, p.DecayRate)
 	}
 
-	p := scheduler.NewPacker(db, calc, 20, 20)
+	p := scheduler.NewPacker(db, calc, 20, 20, nil)
 	packed, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
@@ -136,7 +136,7 @@ func TestPick_BudgetOverflow(t *testing.T) {
 	mustCreateProjectAt(t, db, "first", 6, 5, 0, 1.0)
 	mustCreateProjectAt(t, db, "second", 6, 5, 0, 1.0)
 
-	p := scheduler.NewPacker(db, calc, 10, 10)
+	p := scheduler.NewPacker(db, calc, 10, 10, nil)
 	packed, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
@@ -175,7 +175,7 @@ func TestPick_CooldownBoundary(t *testing.T) {
 		t.Fatalf("update last_tick: %v", err)
 	}
 
-	p := scheduler.NewPacker(db, calc, 10, 10)
+	p := scheduler.NewPacker(db, calc, 10, 10, nil)
 	packed, err := p.Pick(time.Now(), nil)
 	if err != nil {
 		t.Fatalf("Pick: %v", err)
@@ -302,7 +302,7 @@ func TestMultiPoolPacker_Borrowing(t *testing.T) {
 	}
 
 	calc := scheduler.NewUrgencyCalculator(time.Minute, 4*time.Hour, 10)
-	mp := scheduler.NewMultiPoolPacker(100, 10)
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
 
 	projs, _ := database.ListProjects(context.Background(), db, false)
 	nss, _ := database.ListNamespaces(context.Background(), db, true)
@@ -342,7 +342,7 @@ func TestPacker_StableSort(t *testing.T) {
 		mustCreateProjectAt(t, db, n, 5, 5, 0, 1.0)
 	}
 
-	p := scheduler.NewPacker(db, calc, 50, 10)
+	p := scheduler.NewPacker(db, calc, 50, 10, nil)
 
 	first, _ := p.Pick(time.Now(), nil)
 	second, _ := p.Pick(time.Now(), nil)

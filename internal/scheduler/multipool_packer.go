@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/coding-herms/scheduler/internal/config"
 	"github.com/coding-herms/scheduler/internal/database"
 )
 
@@ -48,16 +49,18 @@ type PackResult struct {
 // When no namespaces exist (or namespace mode is disabled) it falls back to
 // the flat single-pool Packer.Pick method.
 type MultiPoolPacker struct {
-	allocator     *NamespaceAllocator
-	maxConcurrent int
+	allocator       *NamespaceAllocator
+	maxConcurrent   int
+	blackoutWindows []config.BlackoutWindow
 }
 
 // NewMultiPoolPacker creates a packer with the given global budget and
 // concurrency cap.
-func NewMultiPoolPacker(budget, maxConcurrent int) *MultiPoolPacker {
+func NewMultiPoolPacker(budget, maxConcurrent int, blackoutWindows []config.BlackoutWindow) *MultiPoolPacker {
 	return &MultiPoolPacker{
-		allocator:     NewNamespaceAllocator(budget),
-		maxConcurrent: maxConcurrent,
+		allocator:       NewNamespaceAllocator(budget),
+		maxConcurrent:   maxConcurrent,
+		blackoutWindows: blackoutWindows,
 	}
 }
 
@@ -65,7 +68,7 @@ func NewMultiPoolPacker(budget, maxConcurrent int) *MultiPoolPacker {
 // The caller provides a configured *sql.DB; this is used when NamespaceMode=false
 // or no namespaces exist.
 func (m *MultiPoolPacker) FlatFallback(db *sql.DB, calc *UrgencyCalculator, budget int, now time.Time) ([]PackedProject, error) {
-	p := NewPacker(db, calc, budget, m.maxConcurrent)
+	p := NewPacker(db, calc, budget, m.maxConcurrent, m.blackoutWindows)
 	return p.Pick(now, nil)
 }
 
