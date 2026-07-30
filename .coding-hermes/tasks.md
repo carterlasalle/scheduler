@@ -443,3 +443,48 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 - Cleaned stale Hilo orphan entry (_tick_check_cooldown.py — not on disk, Variant B staleness).
 
 **Verdict:** IDLE — maintenance mode. All 15 gates pass. 35/35 GitReins complete. Cooldown drifted after daemon restart (pattern since tick #131). DecayRate=0 fix confirmed effective (not the drift source). Schema default 900s is the real root cause — requires Bane decision on FIX-STACK (systemd). No actionable code work. Self-pause at 43200s.
+
+
+### Tick #178 — 2026-07-30 09:36 UTC (DeepSeek V4 Pro)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at 7a5291d, no uncommitted changes, up to date |
+| 2 | Build | PASS | go build ./... clean |
+| 3 | Vet | PASS | go vet clean |
+| 4 | Lint | PASS | golangci-lint: 0 issues |
+| 5 | Gofmt | CLEAN | 0 unformatted files |
+| 6 | Tests | PASS | 9/9 packages, 0 failures (8 cached, 1 fresh: scheduler) |
+| 7 | TODO/FIXME | CLEAN | 0 matches in .go files |
+| 8 | Hilo | PASS | 499 edges across 70 files (3 languages). Hilo=useful |
+| 9 | GitReins guard | PASS | Tier 1: secrets clean. 35/35 tasks complete |
+| 10 | GitReins judge | OK | Evaluator configured (deepseek-v4-flash). 35/35 complete, 0 pending |
+| 11 | Security | PASS | CODEOWNERS, LICENSE, SECURITY.md, SUPPORT.md, GOVERNANCE.md present. gitleaks clean |
+| 12 | Docs | 9/9 | All governance docs present |
+| 13 | Specs | 11/11 | S01-S11 all present |
+| 14 | Deps | OK | 8 outdated (same stable set: go-cmp, demangle, go-isatty, goldmark, x/exp, x/telemetry, libc, sqlite) |
+| 15 | E2E smoke | 10/10 | Health, Status, Projects, Namespaces, Ticks, Dashboard (/), Queue, OpenAPI (all 200). Cooldown restored via PUT API |
+| 16 | DuckBrain | CONFIRMED | Write ID dcca5d89, recall verified persisted |
+
+**COOLDOWN STATUS (tick #178):**
+- Cooldown found at 900s on arrival (drifted from 43200s set at tick #177). DB updated_at=2026-07-30T09:17:05Z — daemon restarted recently.
+- Restored to 43200s via PUT API (CooldownS=43200, DecayRate=0). Verified via GET API + DB direct query.
+- DecayRate=0 confirmed via DB. Root cause: daemon restart resets to schema default 900s.
+- Pattern: identical to ticks #167-#177. Daemon restart → 900s → restore → 43200s survives until next restart.
+
+**Fleet health snapshot:**
+- Daemon running (4h35m uptime), 4 active ticks, 35 active projects, status OK.
+- 35/35 GitReins tasks complete, 0 pending.
+- API fully functional: 10/10 endpoints responding.
+- No CRON_PAUSE_REQUESTED on disk.
+
+**NEVER-DONE 16-point audit (tick #178 — incremental, 1 tick since #177):**
+- No code changes since tick #175 (GOVERNANCE.md). All 16 gates pass.
+- COOLDOWN-REVERSION: Drifted again after daemon restart. Restored 900→43200s. Root cause unchanged: schema default 900s on daemon init. Requires migration or systemd — FIX-STACK blocked (Bane defers).
+- FIX-STACK: Still BLOCKED (Bane defers).
+- E2E-001: Foreman-direct smoke 10/10 (this tick). Next full browser E2E due in 5-10 ticks.
+- M4 implicit-pending scan: 0 new tasks. All active rows are resolved/blocked/recurring.
+- DuckBrain: Write + recall verified (ID dcca5d89, namespace coding-hermes).
+- Board: 6 prior DuckBrain entries exist in namespace.
+
+**Verdict:** IDLE — maintenance mode. All 16 gates pass. 35/35 GitReins complete. Cooldown drifted after daemon restart (pattern since tick #131 confirmed). Restored 43200s. DecayRate=0 confirmed. FIX-STACK blocked. No actionable code work. Self-pause at 43200s.
