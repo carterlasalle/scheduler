@@ -488,3 +488,52 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 - Board: 6 prior DuckBrain entries exist in namespace.
 
 **Verdict:** IDLE — maintenance mode. All 16 gates pass. 35/35 GitReins complete. Cooldown drifted after daemon restart (pattern since tick #131 confirmed). Restored 43200s. DecayRate=0 confirmed. FIX-STACK blocked. No actionable code work. Self-pause at 43200s.
+
+### Tick #179 — 2026-07-30 13:22 UTC (DeepSeek V4 Pro)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at 52fa60b, no uncommitted changes, 2 commits ahead of origin |
+| 2 | Build | PASS | go build ./... clean |
+| 3 | Vet | PASS | go vet clean |
+| 4 | Gofmt | CLEAN | 0 unformatted files |
+| 5 | Tests | PASS | 9/9 packages, 0 failures |
+| 6 | TODO/FIXME | CLEAN | 0 matches in .go files |
+| 7 | Hilo | PASS | 481 edges across 68 files (3 languages). Hilo=useful. **Cache purged** to fix Variant B staleness (`_tick_check_cooldown.py` phantom + `cmd/schedulerd/schema.go` stale — both eliminated) |
+| 8 | GitReins guard | PASS | Tier 1: secrets clean, build/vet/tests pass. 35/35 tasks complete |
+| 9 | GitReins judge | OK | Evaluator configured (deepseek-v4-flash). 35/35 complete, 0 pending |
+| 10 | Security | PASS | CODEOWNERS, LICENSE, SECURITY.md, SUPPORT.md, GOVERNANCE.md present. gitleaks clean |
+| 11 | Docs | 9/9 | CHANGELOG, CODE_OF_CONDUCT, CODEOWNERS, CONTRIBUTING, GOVERNANCE, LICENSE, README, SECURITY, SUPPORT all present |
+| 12 | Specs | 11/11 | S01-S11 all present |
+| 13 | Deps | OK | 8 outdated (same stable set: go-cmp, demangle, go-isatty, goldmark, x/exp, x/telemetry, libc, sqlite). libc 1.74.3 retracted |
+| 14 | E2E smoke | PASS | Health 200, Status 200 (35 active projects), Projects 200 (64 total), Namespaces 200 (5), Ticks 200, Dashboard 200, OpenAPI 200. All endpoints responding |
+| 15 | Middle-out wiring | PASS | InitDB→NewLoop→NewServer→MCP intact (unchanged, no code changes since tick #175) |
+| 16 | Cooldown | RESTORED | Drifted 43200→900s (daemon restart, 17m uptime). Restored to 43200s via PUT API (CooldownS=43200, DecayRate=0, GET verified) |
+
+**COOLDOWN STATUS (tick #179):**
+- Cooldown found at 900s on arrival. Daemon uptime: 17m (recent restart ~13:03 UTC).
+- Restored to 43200s via PUT API (CooldownS=43200, DecayRate=0). Verified via GET API.
+- DecayRate=0 confirmed. Root cause unchanged: schema default 900s on daemon init.
+- Pattern: identical to ticks #167-#178. Daemon restart → 900s → restore → 43200s survives until next restart.
+
+**HILO CACHE MAINTENANCE (tick #179):**
+- Variant B staleness: `_tick_check_cooldown.py` phantom orphan persisted in DuckDB cache across multiple ticks (not on disk since before tick #177, reappeared after each warm).
+- `cmd/schedulerd/schema.go` also a stale orphan (no incoming edges in stale cache, but has edges in fresh parse).
+- Fix: `rm -f .vfs/graph/graph.db* && hilo graph warm` → 481 edges across 68 files, clean orphan list.
+- Both phantom entries eliminated. Hilo now reflects actual filesystem state.
+
+**Fleet health snapshot:**
+- Daemon running (17m uptime), 2 active ticks, 35 active projects, status OK.
+- 35/35 GitReins tasks complete, 0 pending.
+- API fully functional: all endpoints responding.
+- No CRON_PAUSE_REQUESTED on disk.
+
+**NEVER-DONE 16-point audit (tick #179 — incremental, 1 tick since #178):**
+- No code changes since tick #175 (GOVERNANCE.md). All 16 gates pass.
+- COOLDOWN-REVERSION: Drifted again after daemon restart. Restored 900→43200s. Root cause unchanged: schema default 900s on daemon init. 9+ ticks of identical pattern. Requires migration or systemd — FIX-STACK blocked (Bane defers).
+- Hilo: Variant B cache staleness fixed (rm+rewarm). Stale `_tick_check_cooldown.py` phantom finally eliminated after 3+ ticks.
+- FIX-STACK: Still BLOCKED (Bane defers).
+- E2E-001: Foreman-direct smoke (this tick). Next full browser E2E due in ~5 ticks.
+- M4 implicit-pending scan: 0 new tasks. All active rows are resolved/blocked/recurring.
+
+**Verdict:** IDLE — maintenance mode. All 16 gates pass. 35/35 GitReins complete. Cooldown drifted after daemon restart (pattern since tick #131, 9+ ticks identical). Restored 43200s. Hilo cache purged (Variant B staleness fixed). DecayRate=0 confirmed. FIX-STACK blocked. No actionable code work. Self-pause at 43200s.
