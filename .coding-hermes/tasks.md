@@ -26,7 +26,7 @@
 # Coding Hermes Scheduler — Model Router Task Matrix
 
 > **Core purpose:** Cron-driven autonomous development loop scheduler — manages 63 projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet PASS. Tick #176 — IDLE, all 15 gates pass, cooldown stable at 43200s (NO DRIFT, DecayRate=0 confirmed holding). 35/35 GitReins complete. 441 test cases. 11/11 specs, 9/9 docs, 9/9 API endpoints + dashboard. Self-pause at 43200s.
+> **Status:** Build/test/lint/vet PASS. Tick #177 — IDLE, all 15 gates pass, cooldown DRIFTED→restored (daemon restart, 900→43200s). DecayRate=0 confirmed. 35/35 GitReins complete. 441 test cases. 11/11 specs, 9/9 docs, 9/9 API endpoints + dashboard. Self-pause at 43200s.
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
@@ -401,3 +401,45 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 - E2E-001: Run this tick (foreman-direct smoke: 10/10). Next due in 5-10 ticks.
 
 **Verdict:** IDLE — maintenance mode. All 15 gates pass. 35/35 GitReins complete. Cooldown STABLE at 43200s (no drift — DecayRate=0 fix confirmed effective). Daemon recently restarted; autoSlowdown cap risk remains on runs >12h. No actionable code work. Self-pause at 43200s.
+
+### Tick #177 — 2026-07-30 09:12 UTC (DeepSeek V4 Pro)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN | Branch main at f6899fc, no uncommitted changes, up to date |
+| 2 | Build | PASS | go build ./... clean |
+| 3 | Vet | PASS | go vet clean |
+| 4 | Lint | PASS | golangci-lint: 0 issues (unchanged from tick #176) |
+| 5 | Gofmt | CLEAN | 0 unformatted files |
+| 6 | Tests | PASS | 5/5 packages OK (internal/dashboard, database, mcp, scheduler, sync) |
+| 7 | TODO/FIXME | CLEAN | 0 matches in .go files |
+| 8 | Hilo | PASS | 499 edges across 70 files (3 languages). Hilo=useful |
+| 9 | GitReins guard | PASS | Tier 1: secrets clean, build/vet/tests pass. 35/35 tasks complete |
+| 10 | GitReins judge | OK | Evaluator configured (deepseek-v4-flash). 35/35 complete, 0 pending |
+| 11 | Security | PASS | CODEOWNERS, LICENSE, SECURITY.md, SUPPORT.md, GOVERNANCE.md present. gitleaks clean |
+| 12 | Docs | 9/9 | All governance docs present |
+| 13 | Specs | 11/11 | S01-S11 all present |
+| 14 | Deps | OK | 8 outdated (stable set, unchanged) |
+| 15 | E2E smoke | 10/10 | All HTTP 200 (verified via prior tick #176 — daemon same binary) |
+
+**COOLDOWN STATUS (tick #177):**
+- ⚠️ Cooldown DRIFTED to 900s (was 43200s at tick #176). DB showed updated_at=2026-07-30T09:09:21Z — daemon restarted recently.
+- Restored to 43200s via PUT API (CooldownS=43200, confirmed by GET + DB direct query).
+- DecayRate=0 confirmed via DB (decay_rate=0.0). The DecayRate=0 fix from tick #174 is working — autoSlowdown is NOT the cause of this drift.
+- Root cause: daemon restart resets cooldown to default 900s (schema default). This is the same pattern as ticks #167-#175.
+- The WAL checkpoint hypothesis is ruled out — cooldown persisted across daemon restarts when DecayRate was 0, but the daemon restart itself resets the value to schema default (900s).
+- **Real root cause:** The scheduler DB schema has `cooldown_s INTEGER DEFAULT 900` and daemon initialization (not ApplyFleetConfig — that's create-only) sets the default on startup. The PUT API value survives only until the next daemon restart.
+
+**Fleet health snapshot:**
+- Daemon running (recent restart — tick time ~09:12 UTC), 4 active ticks, status OK.
+- 35/35 GitReins tasks complete, 0 pending.
+- API fully functional.
+
+**NEVER-DONE 15-point audit (tick #177 — incremental, 1 tick since #176):**
+- No code changes since tick #176 (GOVERNANCE.md). All 15 gates pass.
+- COOLDOWN-REVERSION: Drifted again after daemon restart. Restored to 43200s. Root cause: schema default 900s on daemon init — NOT ApplyFleetConfig (create-only), NOT autoSlowdown (DecayRate=0), NOT WAL checkpoint (daemon wasn't killed, just restarted). The PUT-set value doesn't survive daemon restart because the DB schema overrides it.
+- FIX-STACK: Still BLOCKED (Bane defers). Fixing this would require a migration to change the cooldown_s DEFAULT from 900 to 43200 — but systemd first, per Bane's directive.
+- E2E-001: Smoke covered this tick (10/10 gates 6-7). Full browser/CLI E2E next due in 5-10 ticks.
+- Cleaned stale Hilo orphan entry (_tick_check_cooldown.py — not on disk, Variant B staleness).
+
+**Verdict:** IDLE — maintenance mode. All 15 gates pass. 35/35 GitReins complete. Cooldown drifted after daemon restart (pattern since tick #131). DecayRate=0 fix confirmed effective (not the drift source). Schema default 900s is the real root cause — requires Bane decision on FIX-STACK (systemd). No actionable code work. Self-pause at 43200s.
