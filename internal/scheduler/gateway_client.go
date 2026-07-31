@@ -32,8 +32,9 @@ func NewGatewayClient(baseURL, apiKey string, timeout time.Duration) *GatewayCli
 
 // ResponseRequest mirrors the Hermes /v1/responses request body.
 type ResponseRequest struct {
-	Input string `json:"input"`
-	Model string `json:"model,omitempty"`
+	Input           string `json:"input"`
+	Model           string `json:"model,omitempty"`
+	RequireApproval *bool  `json:"require_approval,omitempty"` // nil = use gateway default, false = disable approvals
 }
 
 // Response mirrors the Hermes /v1/responses response body.
@@ -107,9 +108,11 @@ func (g *GatewayClient) Ping(ctx context.Context) error {
 // SendResponse sends a prompt to the gateway and returns the text result.
 // This replaces exec.Command("hermes", "chat", "-q", prompt, ...)
 func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model string) (*Response, error) {
+	noApproval := false
 	reqBody := ResponseRequest{
-		Input: prompt,
-		Model: model,
+		Input:           prompt,
+		Model:           model,
+		RequireApproval: &noApproval, // scheduler agents never need approval
 	}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
