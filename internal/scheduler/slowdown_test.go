@@ -340,3 +340,65 @@ func TestAutoSlowdown_DBError_ProductivePath(t *testing.T) {
 	// Should return silently — no panic.
 	autoSlowdown(db, "dberr2", &buf)
 }
+
+// =============================================================================
+// Operator-set cooldown guard (cooldown drift fix)
+// Cooldowns > autoSlowdownMaxCD (1h) are operator-set (foreman self-pause).
+// A PRODUCTIVE verdict must NOT clobber them back to 600s.
+// =============================================================================
+
+func TestAutoSlowdown_OperatorSet_ProductiveDoesNotReset(t *testing.T) {
+	db := slowdownTestDB(t)
+	insertSlowdownProject(t, db, "op_43200", 43200) // 12h self-pause
+
+	var buf bytes.Buffer
+	buf.WriteString("VERDICT: PRODUCTIVE — all gates green\n")
+	autoSlowdown(db, "op_43200", &buf)
+
+	if got := getSlowdownCooldown(t, db, "op_43200"); got != 43200 {
+		t.Errorf("cooldown = %d, want 43200 — operator-set cooldown must survive PRODUCTIVE (was the drift bug)", got)
+	}
+}
+
+func TestAutoSlowdown_OperatorSet_Boundary3600_NotReset(t *testing.T) {
+	db := slowdownTestDB(t)
+	insertSlowdownProject(t, db, "op_3600", 3600) // exactly at boundary — still operator-set
+
+	var buf bytes.Buffer
+	buf.WriteString("VERDICT: PRODUCTIVE\n")
+	autoSlowdown(db, "op_3600", &buf)
+
+	if got := getSlowdownCooldown(t, db, "op_3600"); got != 3600 {
+		t.Errorf("cooldown = %d, want 3600 — boundary cooldown must survive PRODUCTIVE", got)
+	}
+}
+
+func TestAutoSlowdown_AutoBand_ProductiveStillResets(t *testing.T) {
+	// Below the operator-set threshold, the productive reset still works
+	// (auto-managed escalation chain stays functional).
+	db := slowdownTestDB(t)
+	insertSlowdownProject(t, db, "auto_2700", 2700) // 45m — auto-managed band
+
+	var buf bytes.Buffer
+	buf.WriteString("VERDICT: PRODUCTIVE\n")
+	autoSlowdown(db, "auto_2700", &buf)
+
+	if got := getSlowdownCooldown(t, db, "auto_2700"); got != 600 {
+		t.Errorf("cooldown = %d, want 600 — auto-band cooldown still resets on PRODUCTIVE", got)
+	}
+}
+
+func TestAutoSlowdown_OperatorSet_IdleStillEscalates(t *testing.T) {
+	// IDLE escalation is allowed at any level: it only increases cooldown,
+	// so it can never clobber operator intent (it pauses MORE, not less).
+	db := slowdownTestDB(t)
+	insertSlowdownProject(t, db, "op_idle", 43200)
+
+	var buf bytes.Buffer
+	buf.WriteString("IDLE TICK\n")
+	autoSlowdown(db, "op_idle", &buf)
+
+	if got := getSlowdownCooldown(t, db, "op_idle"); got != 64800 {
+		t.Errorf("cooldown = %d, want 64800 (43200 * 1.5 — idle escalation still allowed)", got)
+	}
+}

@@ -9,7 +9,14 @@ import (
 
 // autoSlowdown detects IDLE signals in tick output and adjusts the project's cooldown.
 // Uses the structured VERDICT: line from the foreman (e.g. "VERDICT: productively — IDLE").
-// Cooldown caps at 1 hour. On any non-idle productive tick, resets to base 600s.
+// Cooldown caps at 24h (86400s). On any non-idle productive tick, resets to base 600s.
+//
+// IMPORTANT: the PRODUCTIVE reset never applies to cooldowns above autoSlowdownMaxCD (1h).
+// Those are OPERATOR-SET (foreman self-pause via the PUT API, e.g. 43200s = 12h) and must
+// survive the next tick's verdict — this is the "cooldown drift" fix. IDLE escalation is
+// always allowed: it only increases cooldown, so it can never clobber operator intent.
+const autoSlowdownMaxCD = 3600 // 1h — above this, the productive reset is skipped
+
 func autoSlowdown(db *sql.DB, project string, output *bytes.Buffer) {
 	if output == nil || output.Len() == 0 {
 		return
@@ -49,9 +56,16 @@ func autoSlowdown(db *sql.DB, project string, output *bytes.Buffer) {
 		if err := db.QueryRow("SELECT cooldown_s FROM projects WHERE name = ?", project).Scan(&currentCD); err != nil {
 			return
 		}
+		// Operator-set cooldown: never reset downward. This is the self-pause path
+		// (foreman sets 43200s = 12h via PUT /api/v1/projects). Without this guard,
+		// the next productive tick would silently clobber it back to 600s.
+		if currentCD >= autoSlowdownMaxCD {
+			log.Printf("SLOWDOWN: %s cooldown %ds is operator-set (>=%ds) — productive reset skipped", project, currentCD, autoSlowdownMaxCD)
+			return
+		}
 		if currentCD > 600 {
 			db.Exec("UPDATE projects SET cooldown_s = 600 WHERE name = ?", project)
-			log.Printf("SLOWDOWN: %s productive \u2192 cooldown reset %ds \u2192 600s", project, currentCD)
+			log.Printf("SLOWDOWN: %s productive → cooldown reset %ds → 600s", project, currentCD)
 		}
 	}
 }
