@@ -26,7 +26,7 @@
 # Coding Hermes Scheduler — Model Router Task Matrix
 
 > **Core purpose:** Cron-driven autonomous development loop scheduler — manages 63 projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet PASS. Tick #177 — IDLE, all 15 gates pass, cooldown DRIFTED→restored (daemon restart, 900→43200s). DecayRate=0 confirmed. 35/35 GitReins complete. 441 test cases. 11/11 specs, 9/9 docs, 9/9 API endpoints + dashboard. Self-pause at 43200s.
+> **Status:** Build/test/lint/vet PASS. Tick #181 — PRODUCTIVE, all 18 gates pass, cooldown DRIFTED→restored (daemon restart, 900→43200s). DecayRate=0 confirmed. 35/35 GitReins complete. INFRA-005 verified (remote repo healthy), INFRA-006 migration script fixed+validated (16/16, 67/67), INFRA-007 done (525 skills frontmatter clean), GITREINS-JUDGE verified. Self-pause at 43200s.
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
@@ -45,10 +45,10 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 ||| GUARD-NO-HARDCODED-MODELS | ✅ Done (743282e) — 6 hardcoded strings replaced with config.DefaultModel/config.DefaultProvider constants. Build+test+vet PASS. Zero hardcoded matches remain except the constant definition itself. | HIGH | 2 | — | quality,security,audit | DeepSeek V4 Flash | Code audit: grep + replace hardcoded strings | DeepSeek V4 Pro |
 ||| GUARD-SKILLS-ARE-TEMPLATES | ✅ Done (tick #146) — GITREINS-JUDGE block in tasks.md template-ified: deepseek-v4-flash → {{EVALUATOR_MODEL}}, deepseek-foreman → {{EVALUATOR_PROVIDER}}, GITREINS_LLM_API_KEY → {{EVALUATOR_API_KEY_ENV}}. spawn.go already uses SCHEDULER_FOREMAN_MODEL/SCHEDULER_FOREMAN_PROVIDER env vars with generic fallbacks. AGENTS.md already uses <YOUR_VALUE> placeholders. Zero hardcoded model/provider secrets remain in .md files. | HIGH | 2 | GUARD-NO-HARDCODED-MODELS | quality,security,audit | DeepSeek V4 Flash | Code audit: template-ify skill/config files | DeepSeek V4 Pro |
 ||| AUDIT-DESCENDANT-LIFECYCLE | ✅ Done (tick #147) — Full process lifecycle audit complete. All cleanup paths verified robust. Process group isolation (Setpgid), group-kill on timeout (-PID), 60s zombie reaper, 90min stale cleanup, startup dangling cleanup, context-bounded scanner goroutine, slot pool semaphore. 0 orphaned processes, 15 goroutines healthy. Minor: stderr pipe unread (1MB buffer sufficient, timeout kill is safety net). No code changes needed. | HIGH | 3 | — | audit,infra,quality | DeepSeek V4 Pro | Investigation + fix: process lifecycle audit | GLM-5.2 |
-||| GITREINS-JUDGE | ⚠️ Configure LLM evaluator for commit quality review | 🔴 Critical | 1 | — | gitreins,config | Foreman-direct | deepseek-v4-flash @ GITREINS_LLM_API_KEY in ~/.hermes/.env | — |
-||| INFRA-005 | 🔴 Fix corrupted GitHub skills repo (invalid git objects in coding-hermes/skills) | P0 | 2 | — | git,infra | DeepSeek V4 Flash | Reset + re-push 4 updated skills (foreman, board v2.0, testing, never-done) | Kimi K3 |
-||| INFRA-006 | 🟡 Create DuckDB board migration script for fleet (41 projects: tasks.md → DuckDB Parquet) | P1 | 3 | INFRA-005 | python,duckdb,migration | DeepSeek V4 Pro | Schema: board/tasks/events tables per coding-hermes-board v2.1. Export to Parquet, commit to git. | Kimi K3 |
-||| INFRA-007 | ⬜ Audit all coding-hermes skills for YAML frontmatter corruption | P1 | 2 | INFRA-005 | yaml,validation | DeepSeek V4 Flash | foreman was broken for weeks; check all SKILL.md files | — |
+||| GITREINS-JUDGE | ✅ VERIFIED (tick #181) — evaluator configured (deepseek-v4-flash, check-gitreins-judge.py PASS) | 🔴 Critical | 1 | — | gitreins,config | Foreman-direct | deepseek-v4-flash @ GITREINS_LLM_API_KEY in ~/.hermes/.env | — |
+||| INFRA-005 | ✅ VERIFIED (tick #181) — remote repo healthy: fresh clone + git fsck clean, all skills present (foreman v2.9.0, testing v1.0, never-done, broker). Corruption was local-clone-only, already resolved. | P0 | 2 | — | git,infra | DeepSeek V4 Flash | Reset + re-push 4 updated skills (foreman, board v2.0, testing, never-done) | Kimi K3 |
+||| INFRA-006 | 🟡 SCRIPT FIXED + VALIDATED (tick #181) — parser rewritten: section-aware (## Active/NEVER-DONE), |||| leading cells, icon-in-ID cell (✅ BE-12a), digitless IDs (FIX-STACK), priority normalization, fallback col fix, dup dedup. Tested: scheduler 16/16, canopy 67/67 (was 1/16). Fleet cutover pending (archives tasks.md → .bak). | P1 | 3 | INFRA-005 | python,duckdb,migration | DeepSeek V4 Pro | Schema: board/tasks/events tables per coding-hermes-board v2.1. Export to Parquet, commit to git. | Kimi K3 |
+||| INFRA-007 | ✅ DONE (tick #181) — 525 SKILL.md files audited; coding-hermes-config/SKILL.md was missing YAML frontmatter entirely — fixed. All 525 now valid. | P1 | 2 | INFRA-005 | yaml,validation | DeepSeek V4 Flash | foreman was broken for weeks; check all SKILL.md files | — |
 ||| INFRA-008 | ⬜ Wire DuckBrain logging for SDLC events (board v2.0 key patterns) | P2 | 3 | INFRA-005 | duckbrain | DeepSeek V4 Pro | Per-project board state, task lifecycle, worker, audit logging | — |
 ||| E2E-001 | 🔁 E2E Testing Tick — self-improving loop. Load coding-hermes-testing. | Recurring 5-10 ticks | — | — | e2e,testing | GPT-5.6 Luna | Load coding-hermes-testing for F2B/B2F prompts | — |
 
@@ -594,3 +594,53 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 - M4 implicit-pending scan: 0 new tasks. All active rows resolved/blocked/recurring.
 
 **Verdict:** PRODUCTIVE — CI-001 fixed (golangci-lint gofmt issues). All 17 gates pass. 35/35 GitReins complete. Cooldown drifted after daemon restart (pattern since tick #131, 10+ ticks identical). Restored 43200s. DecayRate=0 confirmed. FIX-STACK blocked. Self-pause at 43200s.
+
+### Tick #181 — 2026-07-31 10:30 UTC (DeepSeek V4 Flash)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | CLEAN* | Branch main at 5c3558d (deepseek-v4-flash GA — new since #180). *3 untracked local artifacts: dagger.db, fleet.toml, scheduler.db (left untracked) |
+| 2 | Build | PASS | go build ./... clean |
+| 3 | Vet | PASS | go vet clean |
+| 4 | Lint | PASS | golangci-lint: 0 issues |
+| 5 | Gofmt | CLEAN | 0 unformatted files |
+| 6 | Tests | PASS | 9/9 packages, 0 failures |
+| 7 | TODO/FIXME | CLEAN | 0 matches in .go files |
+| 8 | Hilo | PASS | 490 edges warm / 492 stats across 70 files (3 languages). Hilo=useful. No staleness |
+| 9 | GitReins guard | PASS | Tier 1: secrets clean, build/lint/tests pass. 35/35 tasks complete |
+| 10 | GitReins judge | OK | check-gitreins-judge.py PASS — evaluator configured (deepseek-v4-flash) |
+| 11 | Security | PASS | CODEOWNERS, LICENSE, SECURITY.md, SUPPORT.md, GOVERNANCE.md present. gitleaks clean |
+| 12 | Docs | 9/9 | All governance docs present |
+| 13 | Specs | 11/11 | S01-S11 all present |
+| 14 | Deps | OK | 8 outdated (stable set: go-cmp, demangle, go-isatty, goldmark, x/exp, x/telemetry, libc, sqlite) |
+| 15 | E2E smoke | 9/9 | health, status, projects, namespaces, ticks, queue, events, dashboard, evaluate (POST). All 200 |
+| 16 | Cooldown | RESTORED | Drifted 43200→900s (daemon restart, ~24m uptime). Restored via PUT API (CooldownS=43200, DecayRate=0, GET verified) |
+| 17 | INFRA-005 | VERIFIED | Remote skills repo healthy — fresh clone + git fsck clean (0 errors), all skills present (foreman v2.9.0, testing v1.0, never-done, broker). Corruption was local-clone-only, already resolved |
+| 18 | INFRA-007 | DONE | 525 SKILL.md audited; only coding-hermes-config/SKILL.md missing frontmatter — fixed (added YAML frontmatter). All 525 valid now |
+
+**INFRA-006 — MIGRATION SCRIPT FIXED + VALIDATED (foreman-direct):**
+- `~/.hermes/scripts/migrate-board-to-duckdb.py` existed (created 2026-07-31 01:32) but the parser was broken: extracted 1/16 tasks from the scheduler board (only AUDIT-001 from the Completed section, marked pending).
+- Root causes: (1) no section awareness — parsed Completed rows; (2) `|||| ID` leading-pipe cells not handled; (3) digitless IDs (FIX-STACK, NEVER-DONE, E2E-001, GUARD-*) rejected; (4) fallback column off-by-one (Reasoning cell used instead of Fallback); (5) no dedup.
+- Fix: rewrote parser — section-aware (`## Active`, `## NEVER-DONE`), `_split_cells` drops leading empty cells, icon-in-ID-cell support (`✅ BE-12a`), `_norm_priority` (🔴 Critical→P0, HIGH→P1, Low→P3), `_status_from_text` (icons + BLOCKED keyword), fallback = cols[8] (9-col format), dup dedup preferring non-complete.
+- Validated in sandbox (copies, real boards untouched): scheduler board 16/16 tasks (was 1), canopy board 67/67 (was 0). Statuses: blocked 1 / complete 6 / in_progress 2 / pending 7.
+- Fleet cutover (running on 41 projects, archives tasks.md → .bak) intentionally NOT executed this tick — it's a destructive board migration; leave for a dedicated tick/Bane decision.
+
+**COOLDOWN STATUS (tick #181):**
+- Cooldown found at 900s on arrival. Daemon uptime ~24m (restarted ~10:06 UTC).
+- Restored to 43200s via PUT API (CooldownS=43200, DecayRate=0). Verified via GET (CooldownS=43200, DecayRate=0, Enabled=True).
+- DecayRate=0 confirmed. Root cause unchanged: schema default 900s on daemon init. Pattern identical to ticks #167-#180.
+- FIX-STACK (systemd/migration) still BLOCKED — Bane defers.
+
+**Fleet health snapshot:**
+- Daemon running (~24m uptime), 3 active ticks, 35 active projects, 65 total, status OK.
+- Budget 100, recent: 8,143 completed / 22,132 failed (legacy) / 316 timeout.
+- 35/35 GitReins tasks complete, 0 pending.
+- No CRON_PAUSE_REQUESTED on disk.
+
+**NEVER-DONE 18-point audit (tick #181 — 1 tick since #180):**
+- No scheduler code changes since #180 (gofmt CI-001 fix). New commit 5c3558d (deepseek-v4-flash GA) present but board-noted, not from this tick.
+- All 18 gates pass. INFRA-005 closed (verified), INFRA-007 closed (done), GITREINS-JUDGE verified. INFRA-006 script deliverable done, cutover pending.
+- E2E-001: foreman-direct smoke covered this tick (9/9). Full browser E2E next due in ~4 ticks.
+- M4 implicit-pending scan: 0 new tasks. All active rows resolved/blocked/recurring.
+
+**Verdict:** PRODUCTIVE — INFRA-006 migration script parser rewritten + validated (16/16 scheduler, 67/67 canopy; was 1/16), INFRA-007 done (525 skills frontmatter clean), INFRA-005 verified (remote repo healthy), GITREINS-JUDGE verified. All 18 gates pass. Cooldown restored 900→43200s (daemon restart pattern, 15+ ticks identical). FIX-STACK blocked (Bane defers). Self-pause at 43200s.
