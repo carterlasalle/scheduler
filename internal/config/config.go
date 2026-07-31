@@ -20,7 +20,7 @@ import (
 // Default model and provider names used as fallbacks when no value is
 // specified in TOML, environment variables, or CLI flags.
 const (
-	DefaultModel    = "deepseek-v4-pro"
+	DefaultModel    = "deepseek-v4-flash"
 	DefaultProvider = "deepseek-foreman"
 )
 

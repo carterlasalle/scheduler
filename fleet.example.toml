@@ -15,7 +15,7 @@ workdir = "/home/kara/my-project"         # absolute path to project repo
 weight = 10                               # concurrency budget consumed per tick (1-100)
 priority = 5                              # scheduling priority (1=slowest, 10=fastest)
 cooldown_s = 900                          # minimum seconds between ticks
-model = "deepseek-v4-pro"                 # LLM model for foreman ticks
+model = "deepseek-v4-flash"                 # LLM model for foreman ticks
 provider = "deepseek-foreman"             # provider (PAYG only for foremen)
 namespace_id = "coding-hermes"            # DuckBrain namespace for context
 deliver = "telegram:-1003310984808:12345" # platform:chat_id:thread_id for delivery

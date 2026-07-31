@@ -112,7 +112,7 @@ When the scheduler spawns a foreman via `POST /v1/responses`, it includes `"requ
 ```json
 {
   "input": "[Scheduler tick: ...] Load skills...",
-  "model": "deepseek-v4-pro",
+  "model": "deepseek-v4-flash",
   "require_approval": false
 }
 ```

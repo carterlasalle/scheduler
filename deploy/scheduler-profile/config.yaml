@@ -25,7 +25,7 @@ approvals:
 # ── Model: deepseek PAYG (foreman presence is non-negotiable) ──
 model:
   base_url: https://api.deepseek.com/v1
-  default: deepseek-v4-pro
+  default: deepseek-v4-flash
   provider: deepseek
 
 # ── Providers ──
