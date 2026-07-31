@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"database/sql"
+	"log"
 	"math"
 	"sort"
 	"time"
@@ -70,6 +71,124 @@ func NewMultiPoolPacker(budget, maxConcurrent int, blackoutWindows []config.Blac
 func (m *MultiPoolPacker) FlatFallback(db *sql.DB, calc *UrgencyCalculator, budget int, now time.Time) ([]PackedProject, error) {
 	p := NewPacker(db, calc, budget, m.maxConcurrent, m.blackoutWindows)
 	return p.Pick(now, nil)
+}
+
+// packFlat greedily packs an in-memory project list into PackedProjects using
+// flat single-pool rules (urgency sort, cooldown check, budget, concurrency).
+// Used for: (a) the no-namespaces fallback, and (b) projects whose NamespaceID
+// is nil or points at a namespace that doesn't exist — they must never be
+// silently dropped (Bane 2026-07-31).
+// globalSelected is the number of projects already picked by namespace packing;
+// budgetRemaining is what's left of the global weight budget after namespaces.
+// Returns the newly packed projects (does NOT include namespace-picked ones).
+func (m *MultiPoolPacker) packFlat(
+	projects []database.Project,
+	urgencyCalc *UrgencyCalculator,
+	lastCompleted map[string]time.Time,
+	runningSet map[string]bool,
+	budgetRemaining int,
+	globalSelected int,
+	now time.Time,
+) []PackedProject {
+	if budgetRemaining <= 0 {
+		return nil
+	}
+
+	type scored struct {
+		proj     database.Project
+		urgency  float64
+		lastTick *time.Time
+	}
+	list := make([]scored, 0, len(projects))
+	for i := range projects {
+		p := &projects[i]
+		if !p.Enabled {
+			continue
+		}
+		if runningSet != nil && runningSet[p.Name] {
+			continue
+		}
+		var lastTick *time.Time
+		if lt, ok := lastCompleted[p.Name]; ok {
+			lastTick = &lt
+		}
+		createdAt, _ := time.Parse(time.RFC3339, p.CreatedAt)
+		urgency := urgencyCalc.ComputeUrgency(
+			float64(p.Priority), p.DecayRate, now, lastTick, createdAt,
+		)
+		list = append(list, scored{proj: *p, urgency: urgency, lastTick: lastTick})
+	}
+
+	// Urgency desc, priority desc, oldest-last-tick first.
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].urgency != list[j].urgency {
+			return list[i].urgency > list[j].urgency
+		}
+		if list[i].proj.Priority != list[j].proj.Priority {
+			return list[i].proj.Priority > list[j].proj.Priority
+		}
+		li, lj := list[i].lastTick, list[j].lastTick
+		if li == nil && lj != nil {
+			return true
+		}
+		if li != nil && lj == nil {
+			return false
+		}
+		if li != nil && lj != nil {
+			return li.Before(*lj)
+		}
+		return list[i].proj.Name < list[j].proj.Name
+	})
+
+	var packed []PackedProject
+	used := 0
+	selected := globalSelected
+	for _, s := range list {
+		if selected >= m.maxConcurrent {
+			break
+		}
+		if s.proj.Weight > budgetRemaining {
+			continue
+		}
+		// Cooldown check.
+		if s.lastTick != nil {
+			cooldownDur := time.Duration(s.proj.CooldownS) * time.Second
+			if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout {
+				if mult <= 0 {
+					continue
+				}
+				if mult > 1.0 {
+					cooldownDur = time.Duration(float64(cooldownDur) * mult)
+				}
+			}
+			if now.Sub(*s.lastTick) < cooldownDur {
+				continue
+			}
+		}
+		packed = append(packed, PackedProject{
+			Name:           s.proj.Name,
+			Priority:       float64(s.proj.Priority),
+			Weight:         s.proj.Weight,
+			Urgency:        s.urgency,
+			Workdir:        s.proj.Workdir,
+			RepoURL:        s.proj.RepoURL,
+			Command:        s.proj.Command,
+			Model:          s.proj.Model,
+			Provider:       s.proj.Provider,
+			WorkerModel:    s.proj.WorkerModel,
+			WorkerProvider: s.proj.WorkerProvider,
+			Deliver:        s.proj.Deliver,
+		})
+		used += s.proj.Weight
+		budgetRemaining -= s.proj.Weight
+		selected++
+	}
+
+	if len(packed) > 0 {
+		log.Printf("FLAT-FALLBACK: packed %d unassigned/fallback project(s), used=%d budget=%d",
+			len(packed), used, m.allocator.budget)
+	}
+	return packed
 }
 
 // ---------------------------------------------------------------------------

@@ -62,8 +62,8 @@ func defaultUrgencyCalc() *scheduler.UrgencyCalculator {
 // MultiPoolPacker tests
 // ---------------------------------------------------------------------------
 
-// TestMultiPoolPacker_FlatFallback — NamespaceMode=false (no namespaces) returns
-// empty result from Pack (caller should use FlatFallback instead).
+// TestMultiPoolPacker_FlatFallback — no namespaces → Pack flat-packs the
+// enabled projects itself (Bane 2026-07-31: nothing silently dropped).
 func TestMultiPoolPacker_FlatFallback(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -78,13 +78,16 @@ func TestMultiPoolPacker_FlatFallback(t *testing.T) {
 	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
 	now := time.Now()
 
-	// No namespaces → Pack returns empty Projects.
+	// No namespaces → Pack flat-packs instead of returning empty.
 	result := mp.Pack(projects, nil, defaultUrgencyCalc(), nil, nil, now)
-	if len(result.Projects) != 0 {
-		t.Errorf("Pack with no namespaces returned %d projects, want 0", len(result.Projects))
+	if len(result.Projects) != 1 {
+		t.Fatalf("Pack with no namespaces returned %d projects, want 1 (flat fallback)", len(result.Projects))
+	}
+	if result.Projects[0].Name != "alpha" {
+		t.Errorf("Pack flat fallback picked %q, want alpha", result.Projects[0].Name)
 	}
 
-	// FlatFallback delegates to Packer.Pick.
+	// FlatFallback still delegates to Packer.Pick.
 	picked, err := mp.FlatFallback(db, defaultUrgencyCalc(), 100, now)
 	if err != nil {
 		t.Fatalf("FlatFallback: %v", err)
@@ -115,7 +118,10 @@ func TestMultiPoolPacker_EmptyNamespaces(t *testing.T) {
 	_ = db // keep db reference for clarity — not needed in this test
 }
 
-// TestMultiPoolPacker_UnassignedProjects — projects with NamespaceID=nil are never selected.
+// TestMultiPoolPacker_UnassignedProjects — projects with NamespaceID=nil or a
+// dangling namespace ref are flat-packed instead of silently dropped (Bane
+// 2026-07-31: "allowing things to be assigned where they can't be without
+// putting errors or having a fallback").
 func TestMultiPoolPacker_UnassignedProjects(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -136,8 +142,56 @@ func TestMultiPoolPacker_UnassignedProjects(t *testing.T) {
 	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
 	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), nil, nil, time.Now())
 
-	if len(result.Projects) != 0 {
-		t.Errorf("expected 0 projects (orphan unassigned), got %d: %+v", len(result.Projects), result.Projects)
+	if len(result.Projects) != 1 {
+		t.Fatalf("expected 1 project (orphan flat-packed), got %d: %+v", len(result.Projects), result.Projects)
+	}
+	if result.Projects[0].Name != "orphan" {
+		t.Errorf("expected orphan to be selected via flat fallback, got %q", result.Projects[0].Name)
+	}
+}
+
+// TestMultiPoolPacker_DanglingNamespace — project points at a namespace that
+// doesn't exist → flat-packed, not silently dropped (Bane 2026-07-31).
+// Dangling refs can't be created via the API (FK enforced + soft delete), so
+// simulate the raw-DB path that produces them.
+func TestMultiPoolPacker_DanglingNamespace(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	// One real namespace, one project pointing at a namespace that will vanish.
+	mustCreateNamespace(t, db, makeNamespace("ns-a", 10, 5, 100, true))
+	dangling := "ns-ghost"
+	mustCreateNamespace(t, db, makeNamespace(dangling, 10, 5, 100, true))
+	mustCreateProjectInNS(t, db, "ghost-project", dangling, 10, 5, 0, 1.0)
+
+	// Hard-delete the namespace row via raw SQL (bypasses soft-delete API) —
+	// this is the dangling-ref state that raw DB edits/migrations can leave.
+	if _, err := db.Exec(`DELETE FROM namespaces WHERE id = ?`, dangling); err != nil {
+		t.Fatalf("hard-delete namespace: %v", err)
+	}
+
+	projects, err := database.ListProjects(ctx, db, true)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	namespaces, err := database.ListNamespaces(ctx, db, true)
+	if err != nil {
+		t.Fatalf("ListNamespaces: %v", err)
+	}
+
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
+	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), nil, nil, time.Now())
+
+	found := false
+	names := make([]string, 0, len(result.Projects))
+	for _, p := range result.Projects {
+		names = append(names, p.Name)
+		if p.Name == "ghost-project" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("dangling-namespace project was silently dropped; packed=%v", names)
 	}
 }
 

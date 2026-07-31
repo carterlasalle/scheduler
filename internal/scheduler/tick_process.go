@@ -39,7 +39,11 @@ func (l *Loop) evaluate() {
 	var packed []PackedProject
 	if l.namespaceMode && l.multiPoolPacker != nil {
 		ctx := context.Background()
-		nss, _ := database.ListNamespaces(ctx, l.db, true)
+		// Pass ALL namespaces (enabled + disabled). Pack() skips disabled
+		// namespaces itself; seeing them lets it distinguish "project points
+		// at a disabled namespace" (paused — leave alone) from "project points
+		// at a namespace that doesn't exist" (dangling — flat-pack fallback).
+		nss, _ := database.ListNamespaces(ctx, l.db, false)
 		if len(nss) > 0 {
 			projs, _ := database.ListProjects(ctx, l.db, false)
 			running, lastComp := l.evalContext(ctx)
