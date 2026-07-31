@@ -1,0 +1,33 @@
+# Fleet configuration — cooldown overrides
+# These entries ensure cooldowns survive scheduler restarts.
+# All other projects run from their API-set values (no fleet override).
+
+[[projects]]
+name = "uhlp"
+repo_url = "local:/home/kara/uhlp"
+workdir = "/home/kara/uhlp"
+weight = 15
+priority = 9
+cooldown_s = 900
+model = "deepseek-v4-flash"
+provider = "deepseek-foreman"
+namespace_id = "coding-hermes"
+deliver = "telegram:-1003310984808:92897"
+enabled = true
+
+# hermes-canopy — active build (Phase 11: 2 critical MVP gaps + 13 open items).
+# 900s cooldown so the foreman re-evaluates every 15m and picks up new tasks.
+# Foreman self-pause to 43200s (skill line 190) was misapplied by Tick 104-DUP
+# while tasks were open — this fleet entry pins the active cadence.
+[[projects]]
+name = "hermes-canopy"
+repo_url = "local:/home/kara/hermes-canopy"
+workdir = "/home/kara/hermes-canopy"
+weight = 10
+priority = 10
+cooldown_s = 900
+model = "deepseek-v4-flash"
+provider = "deepseek-foreman"
+namespace_id = "coding-hermes"
+deliver = "telegram:-1003310984808:92776"
+enabled = true
