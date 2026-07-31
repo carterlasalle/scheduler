@@ -19,7 +19,7 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 - **Falls back gracefully** — if the gateway is unreachable, exec.Command(`hermes`, ...) handles it
 - **Tracks outcomes** — every tick is recorded (queued → running → completed/failed)
 - **Exposes control** — REST API, MCP, dashboard, DuckBrain sync
-- **Auto-approves** — `approvals.cron_mode: auto` for non-interactive foreman ticks
+- **Auto-approves** — scheduler agents send `require_approval: false` via the gateway API, so foremen run autonomously without pausing for user confirmation. User-facing chats (Telegram, Discord) keep approvals enabled.
 
 ---
 

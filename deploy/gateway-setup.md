@@ -99,6 +99,46 @@ ExecStart=... --gateway-url http://127.0.0.1:8643
 | MCPs | All (browser, chimera, flights, duckbrain, gitreins) | duckbrain + gitreins |
 | OOM impact | Kills main chat | Scheduler ticks fail, main chat survives |
 | Restart | Drops user chats | Drops in-flight foreman ticks (retryable) |
+| Approvals | Enabled (user confirms destructive actions) | **Disabled** — scheduler sets `require_approval: false` in API requests |
+
+## Approval Handling
+
+The scheduler **automatically disables approvals** for all foreman ticks. Here's how:
+
+### How it works
+
+When the scheduler spawns a foreman via `POST /v1/responses`, it includes `"require_approval": false` in the request body:
+
+```json
+{
+  "input": "[Scheduler tick: ...] Load skills...",
+  "model": "deepseek-v4-pro",
+  "require_approval": false
+}
+```
+
+This tells the Hermes gateway to skip all approval prompts for this request — no `clarify()` pauses, no `terminal` approval dialogs, no blocking on destructive operations. The foreman runs autonomously from start to finish.
+
+### Why this is safe
+
+- **Scheduler foremen are fully autonomous** — they read `.coding-hermes/tasks.md`, execute code, commit, and report. No interactive user is present to approve anything.
+- **User-facing interactions keep approvals** — Telegram, Discord, and direct chat sessions through the main gateway (:8642) still prompt for approval on destructive commands.
+- **No second gateway instance needed** — a single gateway handles both modes. The `require_approval` field is per-request, not per-gateway.
+- **Regression tested** — `gateway_client_test.go` verifies `require_approval: false` is present in every request body the scheduler sends.
+
+### Verification
+
+```bash
+# Start a test server and verify the field is sent
+go test -run TestGatewayClient_SendResponse_DisablesApprovals ./internal/scheduler/
+
+# Live check: inspect the gateway logs during a tick
+journalctl --user -u coding-hermes-scheduler-gateway -f | grep require_approval
+```
+
+### Configuration
+
+No configuration needed — `require_approval: false` is hardcoded in `gateway_client.go:SendResponse()`. Every scheduler-spawned foreman runs without approvals. If a specific project genuinely needs approvals (e.g., it manages production infrastructure), spawn it manually through the main gateway instead of through the scheduler.
 
 ## Known Limitations
 
