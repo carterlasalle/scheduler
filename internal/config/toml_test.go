@@ -218,6 +218,55 @@ func TestApplyFleetConfig(t *testing.T) {
 	}
 }
 
+// TestApplyFleetConfig_PinOverridesExisting — fleet.toml entries PIN cooldown/
+// model/enabled on existing projects (survives daemon restart + foreman
+// self-pause). Bane 2026-07-31: API PUTs revert on restart; fleet.toml is the
+// durable pin (supervisor skill line 424).
+func TestApplyFleetConfig_PinOverridesExisting(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	cfg := &FleetConfig{
+		Projects: []ProjectDef{
+			{Name: "pinned", RepoURL: "https://github.com/example/pinned", Workdir: "/home/kara/pinned"},
+		},
+	}
+	if err := ApplyFleetConfig(ctx, db, cfg); err != nil {
+		t.Fatalf("ApplyFleetConfig: %v", err)
+	}
+
+	// Simulate foreman self-pause + API drift: push it to 43200s.
+	drifty := 43200
+	model := "deepseek-v4-pro"
+	if err := database.UpdateProject(ctx, db, "pinned", database.ProjectUpdates{
+		CooldownS: &drifty, Model: &model,
+	}); err != nil {
+		t.Fatalf("UpdateProject (simulate drift): %v", err)
+	}
+
+	// Re-apply fleet config — the pin must override the drift.
+	cfg.Projects[0].CooldownS = 900
+	cfg.Projects[0].Model = "deepseek-v4-flash"
+	if err := ApplyFleetConfig(ctx, db, cfg); err != nil {
+		t.Fatalf("ApplyFleetConfig (re-pin): %v", err)
+	}
+
+	p, err := database.GetProject(ctx, db, "pinned")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if p.CooldownS != 900 {
+		t.Errorf("pin cooldown: expected 900, got %d (drift won)", p.CooldownS)
+	}
+	if p.Model != "deepseek-v4-flash" {
+		t.Errorf("pin model: expected deepseek-v4-flash, got %q (drift won)", p.Model)
+	}
+}
+
 func TestApplyFleetConfigDefaults(t *testing.T) {
 	db, err := database.InitDB(":memory:")
 	if err != nil {

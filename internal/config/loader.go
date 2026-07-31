@@ -390,7 +390,24 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 
 	for _, pd := range cfg.Projects {
 		if _, err := database.GetProject(ctx, db, pd.Name); err == nil {
-			log.Printf("Config: project %q already exists, skipped", pd.Name)
+			// Existing project — apply the fleet.toml PIN (cooldown, model,
+			// provider, enabled). This is the durable pin the supervisor
+			// relies on (supervisor skill line 424): "API PUTs revert on
+			// daemon restart; fleet.toml is the durable pin." Without this,
+			// the file's "cooldown overrides" comment lies and foreman
+			// self-pause + restart drift wins every time.
+			p := projectFromDef(pd)
+			updates := database.ProjectUpdates{
+				CooldownS: &p.CooldownS,
+				Model:     &p.Model,
+				Provider:  &p.Provider,
+				Enabled:   &p.Enabled,
+			}
+			if err := database.UpdateProject(ctx, db, pd.Name, updates); err != nil {
+				return fmt.Errorf("pin project %q from fleet.toml: %w", pd.Name, err)
+			}
+			log.Printf("Config: pinned project %q (cooldown=%ds, model=%s, enabled=%v)",
+				pd.Name, p.CooldownS, p.Model, p.Enabled)
 			continue
 		} else if !errors.Is(err, database.ErrProjectNotFound) {
 			return fmt.Errorf("lookup project %q: %w", pd.Name, err)
