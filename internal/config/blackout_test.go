@@ -113,9 +113,9 @@ func TestActiveMultiplier_DifferentMultipliers(t *testing.T) {
 
 func TestParseHM(t *testing.T) {
 	tests := []struct {
-		input    string
-		wantH    int
-		wantM    int
+		input string
+		wantH int
+		wantM int
 	}{
 		{"01:00", 1, 0},
 		{"23:59", 23, 59},
