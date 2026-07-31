@@ -84,7 +84,7 @@ func ActiveMultiplier(windows []BlackoutWindow, now time.Time) (float64, bool) {
 		}
 		if (now.After(start) || now.Equal(start)) && now.Before(end) {
 			if w.Multiplier <= 0 {
-				return 0, false // skip entirely
+				return 0, true // in blackout — skip entirely
 			}
 			return w.Multiplier, true
 		}

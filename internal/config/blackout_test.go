@@ -42,8 +42,8 @@ func TestActiveMultiplier_SkipMode(t *testing.T) {
 	}
 	now := time.Date(2026, 7, 30, 2, 0, 0, 0, time.UTC)
 	mult, inBlackout := ActiveMultiplier(windows, now)
-	if mult != 0 || inBlackout {
-		t.Errorf("skip mode: got (%v,%v), want (0,false)", mult, inBlackout)
+	if mult != 0 || !inBlackout {
+		t.Errorf("skip mode: got (%v,%v), want (0,true)", mult, inBlackout)
 	}
 }
 

@@ -134,8 +134,13 @@ func (m *MultiPoolPacker) Pack(
 			if lt, ok := lastCompleted[pu.Project.Name]; ok {
 				cooldownDur := time.Duration(pu.Project.CooldownS) * time.Second
 				// Apply blackout slowdown if inside a peak-pricing window.
-				if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout && mult > 1.0 {
-					cooldownDur = time.Duration(float64(cooldownDur) * mult)
+				if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout {
+					if mult <= 0 {
+						continue // skip mode
+					}
+					if mult > 1.0 {
+						cooldownDur = time.Duration(float64(cooldownDur) * mult)
+					}
 				}
 				if now.Sub(lt) < cooldownDur {
 					continue
@@ -165,8 +170,13 @@ func (m *MultiPoolPacker) Pack(
 				if lt, ok := lastCompleted[pu.Project.Name]; ok {
 					cooldownDur := time.Duration(pu.Project.CooldownS) * time.Second
 					// Apply blackout slowdown if inside a peak-pricing window.
-					if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout && mult > 1.0 {
-						cooldownDur = time.Duration(float64(cooldownDur) * mult)
+					if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout {
+						if mult <= 0 {
+							continue // skip mode — not queued
+						}
+						if mult > 1.0 {
+							cooldownDur = time.Duration(float64(cooldownDur) * mult)
+						}
 					}
 					if now.Sub(lt) < cooldownDur {
 						continue // cooldown-skip, not queued
