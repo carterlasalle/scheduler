@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coding-herms/scheduler/internal/config"
 	"github.com/coding-herms/scheduler/internal/database"
 	"github.com/coding-herms/scheduler/internal/scheduler"
 )
@@ -418,5 +419,80 @@ func TestListEnabled_SkipsDisabled(t *testing.T) {
 	}
 	if got[0].Name != "enabled" {
 		t.Errorf("ListEnabled picked %q, want enabled", got[0].Name)
+	}
+}
+func TestPacker_BlackoutSlowdown_DoublesCooldown(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Date(2026, 7, 30, 8, 0, 0, 0, time.UTC)
+
+	lt := now.Add(-700 * time.Second)
+	if _, err := db.Exec("INSERT INTO projects (name, weight, priority, enabled, cooldown_s, decay_rate, repo_url, workdir, created_at, updated_at, last_tick_completed) VALUES (?, ?, ?, 1, ?, ?, 'https://example.com/test', '/tmp/test', ?, ?, ?)",
+		"peak-test", 10, 5, 600, 1.0,
+		now.Add(-24*time.Hour).Format(time.RFC3339), now.Format(time.RFC3339),
+		lt.Format(time.RFC3339)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+
+	p1 := scheduler.NewPacker(db, calc, 100, 5, nil)
+	packed, _ := p1.Pick(now, nil)
+	if len(packed) == 0 {
+		t.Fatal("no blackout: expected project to be picked (700s > 600s)")
+	}
+
+	windows := []config.BlackoutWindow{{Start: "06:00", End: "10:00", Multiplier: 2.0}}
+	p2 := scheduler.NewPacker(db, calc, 100, 5, windows)
+	packed, _ = p2.Pick(now, nil)
+	if len(packed) > 0 {
+		t.Fatalf("with 2x blackout: expected 0 projects, got %d", len(packed))
+	}
+}
+
+func TestPacker_BlackoutSlowdown_OutsideWindow_NoEffect(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Date(2026, 7, 30, 5, 0, 0, 0, time.UTC)
+
+	lt := now.Add(-700 * time.Second)
+	db.Exec("INSERT INTO projects (name, weight, priority, enabled, cooldown_s, decay_rate, repo_url, workdir, created_at, updated_at, last_tick_completed) VALUES (?, ?, ?, 1, ?, ?, 'https://example.com/test', '/tmp/test', ?, ?, ?)",
+		"outside-test", 10, 5, 600, 1.0,
+		now.Add(-24*time.Hour).Format(time.RFC3339), now.Format(time.RFC3339),
+		lt.Format(time.RFC3339))
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+	windows := []config.BlackoutWindow{
+		{Start: "01:00", End: "04:00", Multiplier: 2.0},
+		{Start: "06:00", End: "10:00", Multiplier: 2.0},
+	}
+	p := scheduler.NewPacker(db, calc, 100, 5, windows)
+	packed, _ := p.Pick(now, nil)
+	if len(packed) == 0 {
+		t.Fatal("outside peak: expected project to be picked")
+	}
+}
+
+func TestPacker_BlackoutSlowdown_SkipMode(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Date(2026, 7, 30, 2, 0, 0, 0, time.UTC)
+
+	lt := now.Add(-2000 * time.Second)
+	db.Exec("INSERT INTO projects (name, weight, priority, enabled, cooldown_s, decay_rate, repo_url, workdir, created_at, updated_at, last_tick_completed) VALUES (?, ?, ?, 1, ?, ?, 'https://example.com/test', '/tmp/test', ?, ?, ?)",
+		"skip-test", 10, 5, 600, 1.0,
+		now.Add(-24*time.Hour).Format(time.RFC3339), now.Format(time.RFC3339),
+		lt.Format(time.RFC3339))
+
+	calc := scheduler.NewUrgencyCalculator(time.Minute, time.Hour, 10)
+
+	p1 := scheduler.NewPacker(db, calc, 100, 5, nil)
+	packed, _ := p1.Pick(now, nil)
+	if len(packed) == 0 {
+		t.Fatal("no blackout: expected project to be picked")
+	}
+
+	windows := []config.BlackoutWindow{{Start: "01:00", End: "04:00", Multiplier: 0}}
+	p2 := scheduler.NewPacker(db, calc, 100, 5, windows)
+	packed, _ = p2.Pick(now, nil)
+	if len(packed) > 0 {
+		t.Fatalf("skip mode: expected 0 projects, got %d", len(packed))
 	}
 }

@@ -169,8 +169,14 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			cooldownDur = p.calculator.ComputeInterval(s.priority)
 		}
 		// Apply blackout slowdown if inside a peak-pricing window.
-		if mult, inBlackout := config.ActiveMultiplier(p.blackoutWindows, now); inBlackout && mult > 1.0 {
-			cooldownDur = time.Duration(float64(cooldownDur) * mult)
+		if mult, inBlackout := config.ActiveMultiplier(p.blackoutWindows, now); inBlackout {
+			if mult <= 0 {
+				totalSkippedCooldown++
+				continue // skip mode — don't spawn at all
+			}
+			if mult > 1.0 {
+				cooldownDur = time.Duration(float64(cooldownDur) * mult)
+			}
 		}
 		if s.lastTickAt != nil && now.Sub(*s.lastTickAt) < cooldownDur {
 			totalSkippedCooldown++
