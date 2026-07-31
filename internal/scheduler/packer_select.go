@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"log"
 	"sort"
 	"time"
 
@@ -11,7 +12,11 @@ import (
 // Pack runs the full multi-pool algorithm and returns selected projects.
 // Falls back to flat single-pool packing when no namespaces exist (the caller
 // is expected to short-circuit on NamespaceMode=false, but we also handle it
-// here defensively).
+// here defensively). Projects with a nil NamespaceID or a namespace ID that
+// does not exist (or is disabled) are NEVER silently dropped: they are
+// flat-packed into the result with the remaining budget (Bane 2026-07-31 —
+// "things are not running... allowing things to be assigned where they can't
+// be without putting errors or having a fallback").
 func (m *MultiPoolPacker) Pack(
 	projects []database.Project,
 	namespaces []database.Namespace,
@@ -22,17 +27,17 @@ func (m *MultiPoolPacker) Pack(
 ) PackResult {
 
 	// --- Fallback: no namespaces → flat single-pool mode ---
-	if len(namespaces) == 0 {
-		return PackResult{Projects: []PackedProject{}, NamespaceTicks: nil}
-	}
-
-	// Phase 1 — allocation (already implemented by NamespaceAllocator).
-	allocations := m.allocator.Allocate(namespaces)
-
 	runningSet := make(map[string]bool, len(running))
 	for _, name := range running {
 		runningSet[name] = true
 	}
+	if len(namespaces) == 0 {
+		packed := m.packFlat(projects, urgencyCalc, lastCompleted, runningSet, m.allocator.budget, 0, now)
+		return PackResult{Projects: packed, NamespaceTicks: nil}
+	}
+
+	// Phase 1 — allocation (already implemented by NamespaceAllocator).
+	allocations := m.allocator.Allocate(namespaces)
 
 	globalRunning := len(runningSet)
 	globalSelected := 0
@@ -45,6 +50,12 @@ func (m *MultiPoolPacker) Pack(
 		usedBudget int
 	}
 	states := make(map[string]*nsPackState)
+
+	// Namespaces that exist (enabled or not) — used to detect dangling refs.
+	nsSet := make(map[string]bool, len(namespaces))
+	for _, ns := range namespaces {
+		nsSet[ns.ID] = true
+	}
 
 	// --- Phase 2 — intra-namespace packing (per namespace) ---
 	for _, ns := range namespaces {
@@ -301,5 +312,69 @@ func (m *MultiPoolPacker) Pack(
 		})
 	}
 
+	// --- Phase 4 — unassigned projects must NEVER be silently dropped ---
+	// Projects with nil NamespaceID or a namespace ID that doesn't exist (or
+	// is disabled) fall through the per-namespace filter above. Pack them flat
+	// with whatever budget remains, and log loudly when it happens.
+	selectedNames := make(map[string]bool, len(result.Projects))
+	for _, p := range result.Projects {
+		selectedNames[p.Name] = true
+	}
+	var unassigned []database.Project
+	for i := range projects {
+		p := &projects[i]
+		if !p.Enabled {
+			continue
+		}
+		if selectedNames[p.Name] {
+			continue
+		}
+		if p.NamespaceID == nil || !nsSet[*p.NamespaceID] {
+			unassigned = append(unassigned, *p)
+		}
+	}
+	if len(unassigned) > 0 {
+		// Budget remaining = global budget minus what namespaces consumed.
+		usedGlobal := 0
+		for _, st := range states {
+			usedGlobal += st.usedBudget
+		}
+		remainingBudget := m.allocator.budget - usedGlobal
+		if remainingBudget < 0 {
+			remainingBudget = 0
+		}
+		flat := m.packFlat(unassigned, urgencyCalc, lastCompleted, runningSet,
+			remainingBudget, globalSelected, now)
+		for _, p := range flat {
+			result.Projects = append(result.Projects, p)
+		}
+		if len(flat) < len(unassigned) {
+			var dropped []string
+			picked := make(map[string]bool, len(flat))
+			for _, p := range flat {
+				picked[p.Name] = true
+			}
+			for _, p := range unassigned {
+				if !picked[p.Name] {
+					dropped = append(dropped, p.Name)
+				}
+			}
+			log.Printf("NS-UNASSIGNED: %d project(s) with nil/unknown namespace, "+
+				"packed %d, DROPPED %v (budget/concurrency exhausted) — "+
+				"assign them to a namespace or raise budget", len(unassigned), len(flat), dropped)
+		} else {
+			log.Printf("NS-UNASSIGNED: %d project(s) with nil/unknown namespace "+
+				"flat-packed into result: %v", len(unassigned), flatNames(flat))
+		}
+	}
+
 	return result
+}
+
+func flatNames(ps []PackedProject) []string {
+	names := make([]string, 0, len(ps))
+	for _, p := range ps {
+		names = append(names, p.Name)
+	}
+	return names
 }
