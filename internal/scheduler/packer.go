@@ -22,6 +22,7 @@ type PackedProject struct {
 	Provider       string // LLM provider for this project (empty = use spawner default)
 	WorkerModel    string // optional: suggested worker model (foreman can override)
 	WorkerProvider string // optional: suggested worker provider (foreman can override)
+	GatewayKey     string // per-foreman Hermes gateway key (empty = shared --gateway-key)
 	Deliver        string // delivery target (telegram:chat_id:thread_id)
 }
 
@@ -56,6 +57,7 @@ type scored struct {
 	provider       string
 	workerModel    string
 	workerProvider string
+	gatewayKey     string
 	deliver        string
 }
 
@@ -65,7 +67,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		SELECT name, weight, priority, decay_rate, enabled, cooldown_s,
 		       last_tick_completed,
 		       created_at, workdir, repo_url, COALESCE(command, ''),
-		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(deliver, '')
+		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(gateway_key, ''), COALESCE(deliver, '')
 		FROM projects
 		WHERE enabled = 1
 		ORDER BY name
@@ -85,7 +87,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		var enabled bool
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
-			&s.model, &s.provider, &s.workerModel, &s.workerProvider, &s.deliver); err != nil {
+			&s.model, &s.provider, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
 		}
@@ -194,6 +196,7 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			Provider:       s.provider,
 			WorkerModel:    s.workerModel,
 			WorkerProvider: s.workerProvider,
+			GatewayKey:     s.gatewayKey,
 			Deliver:        s.deliver,
 		})
 		used += s.weight

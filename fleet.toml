@@ -49,3 +49,20 @@ provider = "deepseek-foreman"
 namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:92776"
 enabled = true
+
+# helios — v1.0 feature-complete, 81+ idle ticks, client-deliverable phase.
+# Bane: 12h cadence. Pin cooldown_s=43200 so daemon restarts + fleet-auto-heal
+# rule 3 (SLOW-COOLDOWN reset) both respect it. Must live in coding-hermes
+# namespace or the namespace weight scheduler skips it entirely.
+[[projects]]
+name = "helios"
+repo_url = "https://github.com/coding-hermes/helios.git"
+workdir = "/home/kara/helios-work"
+weight = 10
+priority = 8
+cooldown_s = 43200
+model = "deepseek-v4-flash"
+provider = "deepseek-foreman"
+namespace_id = "coding-hermes"
+deliver = "telegram:-1003310984808:4297"
+enabled = true
