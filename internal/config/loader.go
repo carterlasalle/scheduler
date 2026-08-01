@@ -403,6 +403,12 @@ func ApplyFleetConfig(ctx context.Context, db *sql.DB, cfg *FleetConfig) error {
 				Provider:  &p.Provider,
 				Enabled:   &p.Enabled,
 			}
+			// GatewayKey is pinned ONLY when fleet.toml explicitly sets one —
+			// a per-foreman key assigned via API must never be cleared by a
+			// restart with a keyless fleet.toml entry.
+			if pd.GatewayKey != "" {
+				updates.GatewayKey = &pd.GatewayKey
+			}
 			if err := database.UpdateProject(ctx, db, pd.Name, updates); err != nil {
 				return fmt.Errorf("pin project %q from fleet.toml: %w", pd.Name, err)
 			}
@@ -454,18 +460,19 @@ func projectFromDef(pd ProjectDef) *database.Project {
 	}
 
 	p := &database.Project{
-		Name:      pd.Name,
-		RepoURL:   pd.RepoURL,
-		Workdir:   pd.Workdir,
-		Weight:    weight,
-		Priority:  priority,
-		CooldownS: cooldown,
-		DecayRate: decay,
-		Model:     model,
-		Provider:  provider,
-		Command:   pd.Command,
-		Deliver:   pd.Deliver,
-		Enabled:   enabled,
+		Name:        pd.Name,
+		RepoURL:     pd.RepoURL,
+		Workdir:     pd.Workdir,
+		Weight:      weight,
+		Priority:    priority,
+		CooldownS:   cooldown,
+		DecayRate:   decay,
+		Model:       model,
+		Provider:    provider,
+		GatewayKey:  pd.GatewayKey,
+		Command:     pd.Command,
+		Deliver:     pd.Deliver,
+		Enabled:     enabled,
 	}
 	if pd.NamespaceID != "" {
 		nsID := pd.NamespaceID

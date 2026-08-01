@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 6
+const latestMigration = 7
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -155,6 +155,13 @@ CREATE INDEX IF NOT EXISTS idx_events_severity ON events(severity, created_at DE
 		stmt: `
 ALTER TABLE projects ADD COLUMN worker_model TEXT DEFAULT '';
 ALTER TABLE projects ADD COLUMN worker_provider TEXT DEFAULT '';
+`,
+	},
+	{
+		version: 7,
+		desc:    "add per-foreman gateway_key column to projects",
+		stmt: `
+ALTER TABLE projects ADD COLUMN gateway_key TEXT DEFAULT '';
 `,
 	},
 }

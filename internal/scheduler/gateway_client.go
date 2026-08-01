@@ -93,7 +93,7 @@ func (g *GatewayClient) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	g.setAuth(req)
+	g.setAuth(req, "")
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
 		return err
@@ -107,7 +107,12 @@ func (g *GatewayClient) Ping(ctx context.Context) error {
 
 // SendResponse sends a prompt to the gateway and returns the text result.
 // This replaces exec.Command("hermes", "chat", "-q", prompt, ...)
-func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model string) (*Response, error) {
+//
+// key overrides the client's default API key for this one request. Pass ""
+// to use the daemon-level shared key (--gateway-key). Foreman spawns pass
+// project.GatewayKey when set, so each foreman authenticates with its own
+// key (Bane 2026-07-31).
+func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model, key string) (*Response, error) {
 	noApproval := false
 	reqBody := ResponseRequest{
 		Input:           prompt,
@@ -125,7 +130,7 @@ func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model string) 
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	g.setAuth(req)
+	g.setAuth(req, key)
 
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
@@ -150,9 +155,15 @@ func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model string) 
 	return &result, nil
 }
 
-func (g *GatewayClient) setAuth(req *http.Request) {
-	if g.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+g.apiKey)
+// setAuth sets the Authorization header. A non-empty key overrides the
+// client default (per-foreman key); empty falls back to the shared daemon key.
+func (g *GatewayClient) setAuth(req *http.Request, key string) {
+	effective := key
+	if effective == "" {
+		effective = g.apiKey
+	}
+	if effective != "" {
+		req.Header.Set("Authorization", "Bearer "+effective)
 	}
 }
 

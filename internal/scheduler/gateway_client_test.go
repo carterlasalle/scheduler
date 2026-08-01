@@ -47,7 +47,7 @@ func TestGatewayClient_SendResponse_DisablesApprovals(t *testing.T) {
 	defer srv.Close()
 
 	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
-	resp, err := client.SendResponse(t.Context(), "test prompt", "test-model")
+	resp, err := client.SendResponse(t.Context(), "test prompt", "test-model", "")
 	if err != nil {
 		t.Fatalf("SendResponse: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestGatewayClient_SendResponse_IncludesModel(t *testing.T) {
 	defer srv.Close()
 
 	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
-	_, err := client.SendResponse(t.Context(), "test prompt", "deepseek-v4-pro")
+	_, err := client.SendResponse(t.Context(), "test prompt", "deepseek-v4-pro", "")
 	if err != nil {
 		t.Fatalf("SendResponse: %v", err)
 	}
@@ -130,13 +130,49 @@ func TestGatewayClient_SendResponse_AuthHeader(t *testing.T) {
 	defer srv.Close()
 
 	client := scheduler.NewGatewayClient(srv.URL, "sk-test-key-123", 30*time.Second)
-	_, err := client.SendResponse(t.Context(), "hello", "test-model")
+	_, err := client.SendResponse(t.Context(), "hello", "test-model", "")
 	if err != nil {
 		t.Fatalf("SendResponse: %v", err)
 	}
 
 	if capturedAuth != "Bearer sk-test-key-123" {
 		t.Errorf("Authorization header = %q, want 'Bearer sk-test-key-123'", capturedAuth)
+	}
+}
+
+// TestGatewayClient_SendResponse_PerForemanKey — a non-empty key passed to
+// SendResponse overrides the client default, so each foreman authenticates
+// with its own key (Bane 2026-07-31).
+func TestGatewayClient_SendResponse_PerForemanKey(t *testing.T) {
+	var capturedAuth string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":     "resp_test",
+			"status": "completed",
+			"output": []map[string]any{},
+			"usage":  map[string]int{},
+		})
+	}))
+	defer srv.Close()
+
+	client := scheduler.NewGatewayClient(srv.URL, "sk-shared-key", 30*time.Second)
+	if _, err := client.SendResponse(t.Context(), "hello", "test-model", "sk-foreman-abc"); err != nil {
+		t.Fatalf("SendResponse: %v", err)
+	}
+	if capturedAuth != "Bearer sk-foreman-abc" {
+		t.Errorf("Authorization = %q, want per-foreman 'Bearer sk-foreman-abc'", capturedAuth)
+	}
+
+	// Empty key falls back to the shared daemon key.
+	if _, err := client.SendResponse(t.Context(), "hello", "test-model", ""); err != nil {
+		t.Fatalf("SendResponse (empty key): %v", err)
+	}
+	if capturedAuth != "Bearer sk-shared-key" {
+		t.Errorf("Authorization = %q, want shared 'Bearer sk-shared-key'", capturedAuth)
 	}
 }
 
@@ -156,7 +192,7 @@ func TestGatewayClient_SendResponse_ErrorResponse(t *testing.T) {
 	defer srv.Close()
 
 	client := scheduler.NewGatewayClient(srv.URL, "test-key", 30*time.Second)
-	_, err := client.SendResponse(t.Context(), "hello", "nonexistent-model")
+	_, err := client.SendResponse(t.Context(), "hello", "nonexistent-model", "")
 	if err == nil {
 		t.Fatal("expected error for gateway error response, got nil")
 	}

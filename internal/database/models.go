@@ -14,6 +14,7 @@ type Project struct {
 	Provider       string  // LLM provider id passed to the spawned agent
 	WorkerModel    string  // optional: suggested worker model (foreman can override)
 	WorkerProvider string  // optional: suggested worker provider (foreman can override)
+	GatewayKey     string  // per-foreman Hermes gateway key; empty = use daemon's shared --gateway-key
 	Command        string  // optional: custom spawn command (overrides default hermes chat)
 	NamespaceID    *string // optional: FK → namespaces.id; NULL = unscheduled in namespace mode
 	Deliver        string  // delivery target: platform:chat_id:thread_id (e.g. telegram:-1003310984808:12)

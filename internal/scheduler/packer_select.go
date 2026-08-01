@@ -299,6 +299,7 @@ func (m *MultiPoolPacker) Pack(
 				Provider:       pu.Project.Provider,
 				WorkerModel:    pu.Project.WorkerModel,
 				WorkerProvider: pu.Project.WorkerProvider,
+				GatewayKey:     pu.Project.GatewayKey,
 				Deliver:        pu.Project.Deliver,
 			})
 		}

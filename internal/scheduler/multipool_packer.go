@@ -177,6 +177,7 @@ func (m *MultiPoolPacker) packFlat(
 			Provider:       s.proj.Provider,
 			WorkerModel:    s.proj.WorkerModel,
 			WorkerProvider: s.proj.WorkerProvider,
+			GatewayKey:     s.proj.GatewayKey,
 			Deliver:        s.proj.Deliver,
 		})
 		used += s.proj.Weight

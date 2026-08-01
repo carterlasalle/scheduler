@@ -208,7 +208,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		// Try HTTP gateway spawn first (zero process overhead).
 		if s.gateway != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-			resp, gwErr := s.gateway.SendResponse(ctx, prompt, model)
+			// Per-foreman gateway key: project.GatewayKey when set, else the
+			// daemon's shared --gateway-key (Bane 2026-07-31).
+			resp, gwErr := s.gateway.SendResponse(ctx, prompt, model, project.GatewayKey)
 			cancel()
 			if gwErr == nil && resp != nil {
 				atomic.AddInt64(&s.spawnCountHTTP, 1)
