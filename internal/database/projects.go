@@ -28,6 +28,26 @@ func CreateProject(ctx context.Context, db *sql.DB, p *Project) error {
 	if p.UpdatedAt == "" {
 		p.UpdatedAt = p.CreatedAt
 	}
+	// Case-insensitive workdir uniqueness — prevents ghost duplicate projects
+	// (e.g. "heading" vs "HEADING" pointing at the same directory). The daemon
+	// and scheduler treat project names as case-sensitive, so two entries can
+	// share a workdir and split ticks unpredictably. Refuse at creation when
+	// the existing project is ENABLED (two active foremen, same board). A
+	// disabled duplicate is harmless (archived entry).
+	if p.Workdir != "" {
+		var existing string
+		var existingEnabled int
+		err := db.QueryRowContext(ctx,
+			`SELECT name, enabled FROM projects WHERE LOWER(workdir) = LOWER(?) LIMIT 1`,
+			p.Workdir).Scan(&existing, &existingEnabled)
+		if err == nil && existingEnabled == 1 {
+			return fmt.Errorf("create project %q: workdir %q already registered by enabled project %q (case-insensitive duplicate)",
+				p.Name, p.Workdir, existing)
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("create project %q: duplicate workdir check: %w", p.Name, err)
+		}
+	}
 	const q = `INSERT INTO projects
 	(name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, command, namespace_id, deliver, enabled, created_at, updated_at)
 	VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`

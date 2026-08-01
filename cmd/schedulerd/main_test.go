@@ -13,10 +13,10 @@ func TestPrintStatus(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	if err := database.CreateProject(ctx, db, &database.Project{Name: "alpha", RepoURL: "local:/tmp", Workdir: "/tmp", Enabled: true, Weight: 10, Priority: 5}); err != nil {
+	if err := database.CreateProject(ctx, db, &database.Project{Name: "alpha", RepoURL: "local:/tmp", Workdir: "/tmp/alpha", Enabled: true, Weight: 10, Priority: 5}); err != nil {
 		t.Fatalf("create project: %v", err)
 	}
-	if err := database.CreateProject(ctx, db, &database.Project{Name: "beta", RepoURL: "local:/tmp", Workdir: "/tmp", Enabled: false, Weight: 10, Priority: 5}); err != nil {
+	if err := database.CreateProject(ctx, db, &database.Project{Name: "beta", RepoURL: "local:/tmp", Workdir: "/tmp/beta", Enabled: false, Weight: 10, Priority: 5}); err != nil {
 		t.Fatalf("create project: %v", err)
 	}
 
