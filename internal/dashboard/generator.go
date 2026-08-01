@@ -38,6 +38,7 @@ type Generator struct {
 	namespaceViewTmpl *template.Template // full page: /namespaces/{id}
 	healthTmpl        *template.Template // full page: /health
 	gatewayURL        string
+	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
 	started           time.Time
 }
@@ -77,6 +78,12 @@ func NewGenerator(db *sql.DB, gatewayURL ...string) *Generator {
 		}
 	}
 	return g
+}
+
+// SetDuckBrainURL registers the DuckBrain HTTP endpoint so the health
+// panel can probe it (mirrors gateway probing). Optional.
+func (g *Generator) SetDuckBrainURL(u string) {
+	g.duckbrainURL = strings.TrimRight(u, "/")
 }
 
 // HTMXJS returns the bundled htmx library bytes for serving via HTTP.
@@ -245,6 +252,31 @@ func (g *Generator) GenerateHealth(w io.Writer) error {
 				_ = resp.Body.Close()
 			}
 		}
+	}
+
+	// DuckBrain probe (fallback visibility): show reachable/unreachable and
+	// any spooled writes pending replay. The sync layer spools failed writes,
+	// so "unreachable" here is not data loss — it's queued for replay.
+	data.DuckBrainStatus = "not configured"
+	data.DuckBrainBaseURL = g.duckbrainURL
+	if g.duckbrainURL != "" {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.duckbrainURL+"/health", nil)
+		if err != nil {
+			data.DuckBrainStatus = "error"
+		} else {
+			resp, err := g.healthClient.Do(req)
+			if err != nil {
+				data.DuckBrainStatus = "unreachable"
+			} else {
+				if resp.StatusCode == http.StatusOK {
+					data.DuckBrainStatus = "connected"
+				} else {
+					data.DuckBrainStatus = fmt.Sprintf("unhealthy (HTTP %d)", resp.StatusCode)
+				}
+				_ = resp.Body.Close()
+			}
+		}
+		_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_spool`).Scan(&data.DuckBrainSpooled)
 	}
 	return g.healthTmpl.Execute(w, data)
 }

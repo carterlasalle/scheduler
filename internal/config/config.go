@@ -149,12 +149,12 @@ type ProjectDef struct {
 	Name        string  `toml:"name"`
 	RepoURL     string  `toml:"repo_url"`
 	Workdir     string  `toml:"workdir"`
-	Weight      int     `toml:"weight"`     // default 10 if <= 0
-	Priority    int     `toml:"priority"`   // default 5 if <= 0
-	CooldownS   int     `toml:"cooldown_s"` // default 900 if <= 0
-	DecayRate   float64 `toml:"decay_rate"` // default 1.0 if <= 0
-	Model       string  `toml:"model"`      // default DefaultModel
-	Provider    string  `toml:"provider"`   // default DefaultProvider
+	Weight      int     `toml:"weight"`      // default 10 if <= 0
+	Priority    int     `toml:"priority"`    // default 5 if <= 0
+	CooldownS   int     `toml:"cooldown_s"`  // default 900 if <= 0
+	DecayRate   float64 `toml:"decay_rate"`  // default 1.0 if <= 0
+	Model       string  `toml:"model"`       // default DefaultModel
+	Provider    string  `toml:"provider"`    // default DefaultProvider
 	GatewayKey  string  `toml:"gateway_key"` // per-foreman Hermes gateway key; empty = shared --gateway-key
 	Command     string  `toml:"command"`
 	NamespaceID string  `toml:"namespace_id"` // optional FK → namespaces.id

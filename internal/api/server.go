@@ -15,6 +15,11 @@ type Server struct {
 	db      *sql.DB
 	loop    *scheduler.Loop
 	started time.Time
+
+	// duckbrainHealth, when set, is called to include DuckBrain sync health
+	// in /api/v1/status. Kept as a func so the API package doesn't import
+	// the sync package (no dependency cycle; nil = feature off).
+	duckbrainHealth func() map[string]interface{}
 }
 
 // NewServer creates an API server.
@@ -24,6 +29,12 @@ func NewServer(db *sql.DB, loop *scheduler.Loop) *Server {
 		loop:    loop,
 		started: time.Now(),
 	}
+}
+
+// SetDuckBrainHealth registers a provider for DuckBrain sync health so the
+// status endpoint can surface fallback state (reachable, spool depth, etc).
+func (s *Server) SetDuckBrainHealth(fn func() map[string]interface{}) {
+	s.duckbrainHealth = fn
 }
 
 // Handler returns an http.Handler for all API routes.
@@ -99,13 +110,17 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	activeTicks := countActiveTicks(ctx, s.db)
 	recentOutcomes := countRecentOutcomes(ctx, s.db)
 	lastEval := getLastEvalTime(ctx, s.db)
-	writeJSON(w, 200, map[string]interface{}{
+	status := map[string]interface{}{
 		"budget_total":    100,
 		"active_projects": len(projects),
 		"active_ticks":    activeTicks,
 		"recent_outcomes": recentOutcomes,
 		"last_evaluation": lastEval,
-	})
+	}
+	if s.duckbrainHealth != nil {
+		status["duckbrain"] = s.duckbrainHealth()
+	}
+	writeJSON(w, 200, status)
 }
 
 // evaluate triggers a forced evaluation cycle.

@@ -9,19 +9,67 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
 )
 
 // DuckBrainSync pushes fleet state to DuckBrain as a read replica
-// via its HTTP REST API.
+// via its HTTP REST API. Writes that fail are spooled to SQLite and
+// replayed once DuckBrain is reachable — a write is never dropped
+// silently (Bane 2026-08-01: DuckBrain was stdio-only, :3000 dead,
+// every write was failing with no fallback).
 type DuckBrainSync struct {
 	db         *sql.DB
 	namespace  string
 	baseURL    string
 	httpClient *http.Client
 	interval   time.Duration
+
+	mu             sync.Mutex
+	reachable      bool   // last cycle reached DuckBrain
+	consecutiveErr int    // consecutive failed post cycles
+	lastErr        string // last error text
+	lastOKAt       string // RFC3339 of last successful post
+	spooled        int    // pending spooled writes (cached from count)
+	alertedDown    bool   // HIGH event already emitted for current outage
+
+	// pendingSpool buffers failed writes during a sync cycle. They are
+	// flushed to sync_spool AFTER all syncs complete, because sync
+	// functions iterate query rows while holding the single DB connection
+	// (SetMaxOpenConns(1)) — writing to the same DB mid-iteration would
+	// deadlock. In-memory buffer keeps the fallback safe (Bane 2026-08-01).
+	pendingSpool []spoolItem
+	// pendingEvents buffers one-shot HIGH/recovery events for the cycle.
+	pendingEvents []pendingSyncEvent
+}
+
+// spoolItem is a buffered failed write awaiting DB persistence.
+type spoolItem struct {
+	key     string
+	domain  string
+	content string
+}
+
+// pendingSyncEvent is a deferred event-log write (HIGH alert or INFO
+// recovery) flushed after the sync cycle's row iterations finish.
+type pendingSyncEvent struct {
+	severity database.EventSeverity
+	message  string
+	details  string
+}
+
+// HealthSnapshot is a thread-safe view of DuckBrain sync health for
+// the status API and dashboard.
+type HealthSnapshot struct {
+	Reachable      bool   `json:"reachable"`
+	ConsecutiveErr int    `json:"consecutive_failures"`
+	LastError      string `json:"last_error,omitempty"`
+	LastOKAt       string `json:"last_ok_at,omitempty"`
+	Spooled        int    `json:"spooled_pending"`
+	BaseURL        string `json:"base_url"`
+	Interval       string `json:"interval"`
 }
 
 // NewDuckBrainSync creates a DuckBrain syncer.
@@ -33,6 +81,21 @@ func NewDuckBrainSync(db *sql.DB, namespace, baseURL string) *DuckBrainSync {
 		baseURL:    baseURL,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		interval:   5 * time.Minute,
+	}
+}
+
+// Health returns a snapshot of sync health, safe for concurrent reads.
+func (d *DuckBrainSync) Health() HealthSnapshot {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return HealthSnapshot{
+		Reachable:      d.reachable,
+		ConsecutiveErr: d.consecutiveErr,
+		LastError:      d.lastErr,
+		LastOKAt:       d.lastOKAt,
+		Spooled:        d.spooled,
+		BaseURL:        d.baseURL,
+		Interval:       d.interval.String(),
 	}
 }
 
@@ -58,10 +121,22 @@ func (d *DuckBrainSync) Run(ctx context.Context) {
 	}
 }
 
-// syncOnce runs one sync cycle: fleet summary + per-project statuses + namespaces
+// syncOnce runs one sync cycle: replay spooled writes first (fallback
+// recovery), then fleet summary + per-project statuses + namespaces
 // + SDLC events + tick lifecycle.
 func (d *DuckBrainSync) syncOnce(ctx context.Context) {
 	log.Println("SYNC: running sync cycle")
+
+	// Phase 0: replay anything spooled from previous failures. This is the
+	// fallback path — spooled writes are re-attempted before fresh syncs so
+	// nothing is lost when DuckBrain comes back online.
+	replayed, replayErr := d.replaySpool(ctx)
+	if replayErr != nil {
+		log.Printf("SYNC: spool replay error: %v", replayErr)
+	}
+	if replayed > 0 {
+		log.Printf("SYNC: replayed %d spooled write(s)", replayed)
+	}
 
 	if err := d.syncFleetSummary(ctx); err != nil {
 		log.Printf("SYNC: fleet summary error: %v", err)
@@ -86,6 +161,82 @@ func (d *DuckBrainSync) syncOnce(ctx context.Context) {
 	if err := d.syncTickLifecycle(ctx); err != nil {
 		log.Printf("SYNC: tick lifecycle error: %v", err)
 	}
+
+	// Flush buffered fallback state NOW, after all row iterations finished
+	// (the single DB connection is free again). Failed writes land in
+	// sync_spool for replay; alert/recovery events land in the event log.
+	// A write is never dropped silently.
+	d.flushPending(ctx)
+
+	// Refresh cached spool depth for the health snapshot.
+	if n, err := database.CountSpooledMemories(ctx, d.db); err == nil {
+		d.mu.Lock()
+		d.spooled = n
+		d.mu.Unlock()
+	}
+}
+
+// flushPending persists buffered spool writes + the one-shot alert/recovery
+// event. Must be called with no open query rows on d.db (single connection).
+func (d *DuckBrainSync) flushPending(ctx context.Context) {
+	d.mu.Lock()
+	spool := d.pendingSpool
+	d.pendingSpool = nil
+	events := d.pendingEvents
+	d.pendingEvents = nil
+	d.mu.Unlock()
+
+	for _, it := range spool {
+		if _, err := database.SpoolMemory(ctx, d.db, it.key, it.domain, it.content); err != nil {
+			log.Printf("SYNC: spool %s failed (data may be lost): %v", it.key, err)
+		} else {
+			log.Printf("SYNC: spooled %s for replay after failure", it.key)
+		}
+	}
+	for _, ev := range events {
+		_ = database.LogEvent(ctx, d.db, &database.Event{
+			Severity:  ev.severity,
+			Component: "duckbrain-sync",
+			Message:   ev.message,
+			Details:   ev.details,
+		})
+	}
+}
+
+// replaySpool attempts every spooled write, oldest first. Successful
+// replays are deleted; failed ones keep their attempt count and error.
+// Returns the number replayed successfully.
+func (d *DuckBrainSync) replaySpool(ctx context.Context) (int, error) {
+	entries, err := database.ListSpooledMemories(ctx, d.db, 500)
+	if err != nil {
+		return 0, err
+	}
+	replayed := 0
+	for _, e := range entries {
+		// Parse the original content JSON back into raw bytes for posting.
+		contentJSON := []byte(e.Content)
+		body := map[string]any{
+			"key":        e.MemKey,
+			"domain":     e.Domain,
+			"content":    string(contentJSON),
+			"attributes": map[string]any{},
+		}
+		postErr := d.postMemoryBody(ctx, body, e.MemKey)
+		if postErr != nil {
+			_ = database.RecordSpoolAttempt(ctx, d.db, e.ID, postErr.Error())
+			log.Printf("SYNC: replay %s failed (attempt %d): %v", e.MemKey, e.Attempts+1, postErr)
+			continue
+		}
+		if err := database.DeleteSpooledMemory(ctx, d.db, e.ID); err != nil {
+			log.Printf("SYNC: delete spooled %s: %v", e.MemKey, err)
+			continue
+		}
+		replayed++
+	}
+	if _, err := database.PruneSpooledMemories(ctx, d.db, 50); err != nil {
+		log.Printf("SYNC: prune spool: %v", err)
+	}
+	return replayed, nil
 }
 
 // fleetSummary is the payload sent to DuckBrain for /fleet/summary.
@@ -391,6 +542,34 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 		"content":    string(payload),
 		"attributes": map[string]any{},
 	}
+
+	postErr := d.postMemoryBody(ctx, body, key)
+	if postErr != nil {
+		// FALLBACK: never drop a write silently. Buffer it for spooling —
+		// it is persisted to sync_spool by flushPending at the end of the
+		// cycle and replayed once DuckBrain is reachable again. This is
+		// what was missing while DuckBrain ran stdio-only with no HTTP
+		// listener — every tick's memory write failed and vanished
+		// (Bane 2026-08-01).
+		d.bufferSpool(key, domain, string(payload))
+		d.recordFailure(postErr.Error())
+		return postErr
+	}
+	d.recordSuccess()
+	return nil
+}
+
+// bufferSpool queues a failed write for persistence. In-memory only —
+// the DB write happens in flushPending (single-connection deadlock guard).
+func (d *DuckBrainSync) bufferSpool(key, domain, content string) {
+	d.mu.Lock()
+	d.pendingSpool = append(d.pendingSpool, spoolItem{key: key, domain: domain, content: content})
+	d.mu.Unlock()
+}
+
+// postMemoryBody posts a raw memory envelope to DuckBrain and returns the
+// transport/app error. It does NOT spool — callers decide fallback policy.
+func (d *DuckBrainSync) postMemoryBody(ctx context.Context, body map[string]any, key string) error {
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal body: %w", err)
@@ -415,4 +594,54 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 	}
 
 	return nil
+}
+
+// recordSuccess updates health after a successful write and queues a
+// recovery event if this ends a previous outage (flushed end-of-cycle).
+func (d *DuckBrainSync) recordSuccess() {
+	d.mu.Lock()
+	wasDown := d.consecutiveErr > 0
+	d.reachable = true
+	d.consecutiveErr = 0
+	d.lastErr = ""
+	d.lastOKAt = time.Now().Format(time.RFC3339)
+	d.alertedDown = false
+	if wasDown {
+		// Recovery event — queued (flushed end-of-cycle with any HIGH).
+		d.pendingEvents = append(d.pendingEvents, pendingSyncEvent{
+			severity: database.SeverityInfo,
+			message:  "DuckBrain reachable again — sync recovered",
+			details:  `{"recovered_at": "` + time.Now().Format(time.RFC3339) + `"}`,
+		})
+	}
+	d.mu.Unlock()
+
+	if wasDown {
+		log.Printf("SYNC: DuckBrain reachable again (recovery)")
+	}
+}
+
+// recordFailure updates health after a failed write and queues a HIGH
+// alert event on the first failure of a new outage (flushed end-of-cycle,
+// not on every retry).
+func (d *DuckBrainSync) recordFailure(errText string) {
+	d.mu.Lock()
+	d.reachable = false
+	d.consecutiveErr++
+	d.lastErr = errText
+	first := !d.alertedDown
+	d.alertedDown = true
+	if first {
+		// First failure of a new outage — queued (flushed end-of-cycle).
+		d.pendingEvents = append(d.pendingEvents, pendingSyncEvent{
+			severity: database.SeverityHigh,
+			message:  "DuckBrain unreachable — writes spooled for replay",
+			details:  `{"error": "` + errText + `", "base_url": "` + d.baseURL + `"}`,
+		})
+	}
+	d.mu.Unlock()
+
+	if first {
+		log.Printf("SYNC: DuckBrain unreachable: %s", errText)
+	}
 }
