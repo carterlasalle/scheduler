@@ -588,6 +588,11 @@ func (d *DuckBrainSync) postMemoryBody(ctx context.Context, body map[string]any,
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// Rate limited (DuckBrain default 100/min; fleet burst can exceed).
+		// Retryable — stop the burst; remaining writes spool for next cycle.
+		return fmt.Errorf("duckbrain rate limited (429)")
+	}
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return fmt.Errorf("duckbrain api returned %d: %s", resp.StatusCode, string(respBody))
