@@ -694,3 +694,35 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 - M4 implicit-pending scan: 0 new tasks. Remaining active: BOARD-V2 (P1, board migration), INFRA-006 (cutover pending, Bane decision), INFRA-008 (P2, DuckBrain SDLC logging), FIX-STACK (blocked)
 
 **Verdict:** PRODUCTIVE — INFRA-009 DONE (ghost heading deleted + guard live), INFRA-010 DONE (7 stale decay=0 projects restored, 0 remaining fleet-wide), INFRA-011 DONE (DuckBrain sync restored by sibling, verified). Sibling session (Bane) landed the cooldown root-cause fix + packer + fleet.toml pin + API guards. All 18 gates pass. Fleet in fast mode (900s policy). Board v2 migration (BOARD-V2/INFRA-006) remains for Bane decision.
+### Tick #182 — 2026-07-31 19:12 UTC (deepseek-v4-flash)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | RACED | Working tree had sibling's uncommitted INFRA-009/010 fixes (server_projects.go, projects.go, fleet.toml regen). Sibling session committed bc438e6 (19:25) + 9f3b8df tick #183 (19:50) mid-tick. Reconciled — no conflicts |
+| 2 | Build | PASS | go build ./... clean |
+| 3 | Vet | PASS | go vet clean |
+| 4 | Lint | FIXED | golangci-lint found S1011 (packer_select.go:348 loop→append) introduced by sibling's 1f6ca71. Fixed, re-ran: 0 issues |
+| 5 | Tests | PASS | 9/9 packages, 0 failures (fixed main_test.go beta workdir dup — sibling's bc438e6 has equivalent fix) |
+| 6 | TODO/FIXME | CLEAN | 0 matches in .go files |
+| 7 | Hilo | PASS | 492 edges across 70 files (3 languages). Hilo=useful |
+| 8 | GitReins guard | PASS | Tier 1: secrets clean, build/lint/tests pass (full mode) |
+| 9 | GitReins judge | OK | Evaluator configured (deepseek-v4-flash). 35/35 tasks complete |
+| 10 | Cooldown | RESTORED | 900→43200s via PUT (CooldownS, DecayRate=1), GET verified. Daemon restarted 19:38 (PID 158749, no --config so fleet.toml not applied) |
+| 11 | INFRA-009 | VERIFIED | Ghost `heading` row already deleted by sibling (DB + API confirm 0 matches, HEADING intact). Dup-workdir audit: no 2 ENABLED projects share a workdir (hivemind-pulse disabled, /tmp test dummies excluded). Guard live (bc438e6) |
+| 12 | INFRA-010 | VERIFIED | 0 enabled projects with decay_rate ≤ 0 (audit). Guard live: PUT rejects decay_rate ≤ 0 (bc438e6) |
+| 13 | INFRA-011 | RESTORED | DuckBrain HTTP :3000 started (PID 215291). POST /api/memories 201 + read-back OK. Sync landing fresh: /fleet/namespaces/coding-hermes/status synced_at 19:41 local |
+| 14 | fleet.toml | NOT COMMITTED | Sibling's regenerated file pinned ~all projects to 900s (captured during drift window) — would clobber every 43200s self-pause on next --config start. Restored committed curated version (git checkout) |
+| 15 | E2E smoke | 10/10 | health, status, projects, namespaces, ticks, queue, events, dashboard, evaluate (POST), MCP. All responding |
+| 16 | Board | RECONCILED | Header referenced tick #182 findings (COOLDOWN-REVERSION root cause: autoSlowdown clobbering operator-set cooldowns, fixed 913650b) but no #182 entry existed. Sibling committed #183. This entry closes the gap |
+
+**COOLDOWN-REVERSION — root cause & fix (committed by sibling 913650b, verified this tick):**
+- autoSlowdown's PRODUCTIVE branch reset ANY cooldown to 600s; next IDLE escalated 600×1.5=900s — the exact observed drift. Daemon restarts were coincidental.
+- Fix: productive reset skips cooldowns ≥3600s (autoSlowdownMaxCD = operator-set boundary). 4 regression tests added. Self-pause at 43200s now survives ticks.
+- With DecayRate=1 and the slowdown fix, 43200s is stable; restored this tick.
+
+**Fleet health snapshot:**
+- Daemon running (PID 158749, no --config), 42 enabled projects, status OK. Budget 100.
+- DuckBrain sync ONLINE (was down for days — INFRA-011 closed).
+- HEADING self-paused (enabled=false, 43200s), ghost `heading` deleted.
+
+**Verdict:** PRODUCTIVE — reconciled with sibling session (bc438e6 code guards + 9f3b8df tick #183). Lint S1011 fixed (packer_select.go). Cooldown restored 43200s. INFRA-009/010/011 verified complete. Hazardous 900s fleet.toml regen rejected. Board #182 gap closed. FIX-STACK blocked (Bane defers). Self-pause at 43200s.
