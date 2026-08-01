@@ -433,6 +433,40 @@ func TestMCP_FleetSetDecay(t *testing.T) {
 	}
 }
 
+// TestMCP_FleetSetDecay_RejectsZero guards against the starvation hole: the
+// HTTP API rejects decay_rate <= 0, and the MCP path must mirror it. Before
+// this guard, foremen could set decay=0 via fleet_set_decay and permanently
+// starve themselves (urgency = pri × 1^0 = flat, packer never picks).
+func TestMCP_FleetSetDecay_RejectsZero(t *testing.T) {
+	m := newMCPTestServer(t)
+	mustCreateMCPProject(t, m.db, "alpha")
+
+	_, resp := m.call(t, map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "fleet_set_decay",
+			"arguments": map[string]interface{}{"name": "alpha", "decay": 0},
+		},
+	})
+	if resp.Error == nil {
+		t.Fatal("expected error for decay=0, got nil")
+	}
+	if !strings.Contains(resp.Error.Message, "decay must be > 0") {
+		t.Fatalf("error message = %q, want decay guard message", resp.Error.Message)
+	}
+
+	// Verify the value was not applied.
+	got, err := database.GetProject(context.Background(), m.db, "alpha")
+	if err != nil {
+		t.Fatalf("get project: %v", err)
+	}
+	if got.DecayRate == 0 {
+		t.Fatal("decay_rate was written despite guard rejection")
+	}
+}
+
 func TestMCP_FleetPauseAndResume(t *testing.T) {
 	m := newMCPTestServer(t)
 	mustCreateMCPProject(t, m.db, "alpha")

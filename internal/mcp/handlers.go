@@ -112,6 +112,16 @@ func (s *Server) toolFleetSetDecay(ctx context.Context, args map[string]interfac
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
+	// Mirror the HTTP API guard (internal/api/server_projects.go): decay_rate
+	// <= 0 makes urgency flat (priority × 1^0) so the packer never picks the
+	// project — a silent permanent starvation. Foremen must not be able to do
+	// this to themselves via MCP. Proven: dexdat-memory starved 87h with a
+	// valid namespace + 900s cooldown because decay_rate was 0; 7 enabled
+	// projects were found at decay=0 (2026-08-01) set through this unguarded
+	// MCP path after the HTTP guard shipped (bc438e6).
+	if d <= 0 {
+		return "", fmt.Errorf("decay must be > 0 (0 causes permanent starvation — urgency never grows)")
+	}
 	if err := database.UpdateProject(ctx, s.db, name, database.ProjectUpdates{DecayRate: &d}); err != nil {
 		return "", err
 	}
