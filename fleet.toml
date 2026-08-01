@@ -15,6 +15,24 @@ namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:92897"
 enabled = true
 
+# chimera-v2 — feature-complete, 32+ idle ticks, BANE escalation to de-prioritize.
+# Foreman self-pause to 43200s (12h) is admin intent — pin it so daemon restarts
+# and fleet-auto-heal rule 3 (SLOW-COOLDOWN reset) both respect it. Without this
+# pin, every daemon restart reverts CooldownS to 900s (6 documented reversions:
+# ticks #51, #56, #60, #61, #62, #63). Auto-heal/audit read THIS file.
+[[projects]]
+name = "chimera-v2"
+repo_url = "local:/home/kara/chimera-v2"
+workdir = "/home/kara/chimera-v2"
+weight = 15
+priority = 10
+cooldown_s = 43200
+model = "deepseek-v4-flash"
+provider = "deepseek-foreman"
+namespace_id = "coding-hermes"
+deliver = "telegram:-1003310984808:50404"
+enabled = true
+
 # hermes-canopy — active build (Phase 11: 2 critical MVP gaps + 13 open items).
 # 900s cooldown so the foreman re-evaluates every 15m and picks up new tasks.
 # Foreman self-pause to 43200s (skill line 190) was misapplied by Tick 104-DUP
