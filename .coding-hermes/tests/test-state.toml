@@ -1,0 +1,19 @@
+[project]
+name = "coding-hermes-scheduler"
+last_full_test = "2026-08-01T15:45:00-05:00"
+
+[test_coverage]
+f2b = 0
+b2f = 6
+negative = 0
+visual = 0
+crypto = 0
+wiring = 3
+structure = 0
+audit = 2
+
+[[known_gaps]]
+dimension = "visual"
+finding = "htmx dashboard render not browser-verified (endpoint 200s + dashboard package tests only)"
+severity = "low"
+task_ref = "E2E-001"
