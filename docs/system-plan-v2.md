@@ -1,6 +1,6 @@
 # Coding Hermes System Plan — V2: Observability, Reliability, Value
 
-**Author:** Hermes (Kara's fleet agent) · **Date:** 2026-08-01 · **Status:** PLAN (not yet implemented)
+**Author:** Hermes (Kara's fleet agent) · **Date:** 2026-08-01 · **Status:** 🔥 BANKAI EXECUTION IN PROGRESS — items ✅ below are DONE, rest are queued
 
 ---
 
@@ -21,6 +21,8 @@ This plan fixes all three: structured logging everywhere, a value ledger that ac
 ### 1.1 `schedulerd` structured logging
 - **Goal:** every tick decision is reconstructable.
 - **Implementation:** Go stdlib `log/slog` JSON handler → append to `~/.hermes/coding-hermes/scheduler.log` with rotation (size-based, keep 5×10MB).
+- **✅ DONE 2026-08-01:** `-log-file` flag + `io.MultiWriter` (commit `4e54fe6`, pushed). All logs persist to `~/.hermes/coding-hermes/scheduler.log` (600 perms) + stdout. Rotation is next (logrotate or size-based).
+- **Immediate win:** logging surfaced that **DuckBrain HTTP sync was failing on every tick** (`connection refused :3000`) — the fleet's memory writes were silently dropped. Fixed: `duckbrain-http.service` (systemd user unit, port 3000) now runs permanently. 148 historic refusals in the log; next tick syncs clean.
 - **Events to log at minimum:**
   - `tick_spawn` — project, tick_id, model, provider, urgency, weight
   - `tick_complete` — project, tick_id, exit_code, commits, cost, duration
@@ -62,6 +64,7 @@ This plan fixes all three: structured logging everywhere, a value ledger that ac
 
 ### 2.1 Anti-fabrication: GitReins LLM judge on every task
 - **The incident:** foreman claimed coverage "100% (was 37%)" for files that were already at 100%; another claimed deps upgraded that weren't. Root cause: the foreman *asserts* rather than *verifies*.
+- **✅ DONE 2026-08-01:** judge verified working live (`gitreins judge parallel-workers` — C1-C4 confirmed against real line numbers, C5 caught the pricing-drift failure). `coding-hermes-foreman` skill Step 7 now **MANDATES** a judge verdict before any task with ACs is marked complete — guard PASS alone is no longer sufficient; marking `[x]` without a verdict is defined as fabrication.
 - **Fix — make GitReins evaluation mandatory, not optional:**
   - Every real task (`## [ ]` with ACs) gets a GitReins task: `gitreins task create <id> "<title>" "<AC1>" ...`
   - On completion: `gitreins task complete <id>` — **this triggers the LLM judge** (already configured: `deepseek-v4-flash`, max_iterations 50, tools read_file/run_command/search_pattern/read_diff/sandbox).
@@ -84,6 +87,7 @@ This plan fixes all three: structured logging everywhere, a value ledger that ac
 
 ### 3.1 Idle-tick economics
 - **The problem:** chimera ran 33 consecutive idle ticks at 12h cooldown, each burning PAYG tokens to re-confirm "all 11 checks pass". That's the system taxing itself for doing nothing.
+- **✅ DONE 2026-08-01:** idle cost ladder added to `coding-hermes-foreman` skill (flash model at idle #1, cheap audit at #3, git-status-only at #5, pause at #7). chimera-v2 fleet.toml already on `deepseek-v4-flash`.
 - **Fix — idle graduation ladder, fleet-wide:**
   - 1–2 idle ticks: normal
   - 3–5: cooldown ×4 (900s→3600s→14400s)
@@ -96,10 +100,8 @@ This plan fixes all three: structured logging everywhere, a value ledger that ac
 - **Fix:** priority = f(last_commit_age, open_task_count, cost_per_commit). Active projects (recent commits, open tasks) get weight; dormant ones decay. Implement as a weekly `fleet-rebalance.py` that rewrites fleet.toml from scheduler DB evidence.
 
 ### 3.3 Value report to Bane (weekly)
-- **Cron job (Sunday 9am):** pull the ledger, produce a one-screen fleet report:
-  - Total spent, total commits, cost/commit
-  - Top 3 projects by value; top 3 by waste (idle cost)
-  - Failure bucket breakdown + what was fixed
+- **Goal:** pull the ledger, produce a one-screen fleet report.
+- **✅ DONE 2026-08-01:** cron `fleet-value-report` (`b33e106a78f3`) — Sundays 9am CT, delivered to this thread. Queries scheduler DB: cost/commits per project, top-5 value, top-5 waste (cost with 0 commits), failure bucket breakdown, weekly delta. First run: 2026-08-02.
 - **Delivered to:** this chat. This is the "so we start using it more" proof — Bane sees exactly what the fleet returns.
 
 ---
