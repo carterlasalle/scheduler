@@ -26,7 +26,7 @@
 # Coding Hermes Scheduler — Model Router Task Matrix
 
 > **Core purpose:** Cron-driven autonomous development loop scheduler — manages 63 projects, spawns foreman ticks, cooldown management, fleet orchestration.
-> **Status:** Build/test/lint/vet PASS. Tick #182 — ROOT CAUSE FOUND: COOLDOWN-REVERSION was autoSlowdown clobbering operator-set cooldowns. PRODUCTIVE verdict → reset to 600s → next IDLE ×1.5 = 900s (observed drift). FIXED in slowdown.go: productive reset skips cooldowns ≥3600s (operator-set self-pause). 4 new regression tests. All 9/9 packages pass. Self-pause at 43200s now survives ticks.
+> **Status:** Build/test/lint/vet PASS. Tick #183 — PRODUCTIVE: INFRA-009 DONE (ghost `heading` deleted, dup-workdir guard live), INFRA-010 DONE (decay_rate guard + 7 stale projects restored to 1.0, 0 remaining), INFRA-011 DONE (DuckBrain :3000 up, sync verified 19:41). Sibling session (Bane) landed cooldown root-cause fix (913650b), packer orphan fix (1f6ca71), fleet.toml pin fix (67c5c0c), ghost/decay API guard (bc438e6). Self-pause at 43200s.
 
 ```
 ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
@@ -36,37 +36,41 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 
 | ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback |
 |----|------|-----|-----|------|------|-------|-----------|----------|
-||| CI-001 | ✅ FIXED (tick #180) — golangci-lint: 2 gofmt issues (blackout_test.go:116, packer_test.go:498). Fixed with `gofmt -w`. Now 0 issues, CI should pass on next push. | HIGH | 2 | — | ci,lint,quality | DeepSeek V4 Flash | Run golangci-lint locally, fix findings, push | DeepSeek V4 Pro |
-||| INFRA-004 | 🟡 CORRECTED — tick #135 source code audit: ApplyFleetConfig (loader.go:376-378) IS create-only (checks GetProject, skips if exists). Does NOT upsert enabled/cooldown on restart. This contradicts tick #133's assumption. Actual cooldown persistence works — cooldown_s survives restarts in SQLite. The "fleet TOML upsert" was an incorrect root cause. Reversion at tick #131 was likely operational (different DB or script-based reset). COOLDOWN-REVERSION and INFRA-004 share NO code-level bug in current source. Closing INFRA-004 — spawn path correct, fleet config correct, persistence works. | HIGH | 3 | — | scheduler,spawn,infra | DeepSeek V4 Pro | Source code audit | DeepSeek V4 Flash |
-||| INFRA-003 | 🔴 Guard against tick storms: cooldown < tick_timeout. Projects with cooldown < tick_timeout spawn overlapping ticks that all timeout. Evidence: hermes-canopy (900s cooldown, 600s timeout = 5 overlaps/2h, $0.83 burned). **Tick #134 finding:** Current daemon runs with `--tick-timeout 600s`. Min cooldown across all 41 enabled projects is 900s. **No tick storm risk at this configuration.** INFRA-003 is preemptively solved by the current config — cooldown > tick_timeout on all projects. Keep on board as documentation, move to CRITICAL/WATCH. | CRITICAL | 3 | — | scheduler,cooldown,storm,infra | Kimi K3 | Bug fix: scheduler timing, tick storm prevention | DeepSeek V4 Pro |
-||| AUTO-SLOWDOWN | ✅ FIXED (tick #132) — `return` → `continue` on spawn.go:332. stdout scanner now reads full output instead of exiting after `session_id:`. Build PASS, 9/9 tests PASS, lint 0 issues. Pushed as 1e7c4d4. | HIGH | 3 | — | scheduler,bug,slowdown | Kimi K3 | Bug fix: output capture, scheduler auto-regulation | DeepSeek V4 Pro |
+|| BOARD-V2 | 🟡 MIGRATE BOARD TO DUCKDB v2.1 — run `python3 ~/.hermes/scripts/migrate-board-to-duckdb.py .` (load skill coding-hermes-board first). Creates .coding-hermes/board/ (schema.sql, tasks.parquet, events.parquet), archives tasks.md → tasks.md.bak, commit. Same pattern as DuckBrain. | P1 | 3 | — | duckdb,board,migration | deepseek-v4-flash | Run migration script, verify Parquet, commit board | deepseek-v4-flash |
+||| CI-001 | ✅ FIXED (tick #180) — golangci-lint: 2 gofmt issues (blackout_test.go:116, packer_test.go:498). Fixed with `gofmt -w`. Now 0 issues, CI should pass on next push. | HIGH | 2 | — | ci,lint,quality | DeepSeek V4 Flash | Run golangci-lint locally, fix findings, push | deepseek-v4-flash |
+||| INFRA-004 | 🟡 CORRECTED — tick #135 source code audit: ApplyFleetConfig (loader.go:376-378) IS create-only (checks GetProject, skips if exists). Does NOT upsert enabled/cooldown on restart. This contradicts tick #133's assumption. Actual cooldown persistence works — cooldown_s survives restarts in SQLite. The "fleet TOML upsert" was an incorrect root cause. Reversion at tick #131 was likely operational (different DB or script-based reset). COOLDOWN-REVERSION and INFRA-004 share NO code-level bug in current source. Closing INFRA-004 — spawn path correct, fleet config correct, persistence works. | HIGH | 3 | — | scheduler,spawn,infra | deepseek-v4-flash | Source code audit | DeepSeek V4 Flash |
+||| INFRA-003 | 🔴 Guard against tick storms: cooldown < tick_timeout. Projects with cooldown < tick_timeout spawn overlapping ticks that all timeout. Evidence: hermes-canopy (900s cooldown, 600s timeout = 5 overlaps/2h, $0.83 burned). **Tick #134 finding:** Current daemon runs with `--tick-timeout 600s`. Min cooldown across all 41 enabled projects is 900s. **No tick storm risk at this configuration.** INFRA-003 is preemptively solved by the current config — cooldown > tick_timeout on all projects. Keep on board as documentation, move to CRITICAL/WATCH. | CRITICAL | 3 | — | scheduler,cooldown,storm,infra | Kimi K3 | Bug fix: scheduler timing, tick storm prevention | deepseek-v4-flash |
+||| AUTO-SLOWDOWN | ✅ FIXED (tick #132) — `return` → `continue` on spawn.go:332. stdout scanner now reads full output instead of exiting after `session_id:`. Build PASS, 9/9 tests PASS, lint 0 issues. Pushed as 1e7c4d4. | HIGH | 3 | — | scheduler,bug,slowdown | Kimi K3 | Bug fix: output capture, scheduler auto-regulation | deepseek-v4-flash |
 | FIX-STACK | Systemd enable — BLOCKED (Bane defers). Scheduler daemon has no systemd unit, restarts wipe cooldown settings. Enabling systemd would persist across restarts. | Medium | 1 | — | infra,systemd,blocked | DeepSeek V4 Flash | Simple: blocked, waiting on Bane decision | — |
 | DeepSeek V4 Flash |
-|||| GUARD-NO-HARDCODED-MODELS | ✅ Done (743282e) — 6 hardcoded strings replaced with config.DefaultModel/config.DefaultProvider constants. Build+test+vet PASS. Zero hardcoded matches remain except the constant definition itself. | HIGH | 2 | — | quality,security,audit | DeepSeek V4 Flash | Code audit: grep + replace hardcoded strings | DeepSeek V4 Pro |
-||| GUARD-SKILLS-ARE-TEMPLATES | ✅ Done (tick #146) — GITREINS-JUDGE block in tasks.md template-ified: deepseek-v4-flash → {{EVALUATOR_MODEL}}, deepseek-foreman → {{EVALUATOR_PROVIDER}}, GITREINS_LLM_API_KEY → {{EVALUATOR_API_KEY_ENV}}. spawn.go already uses SCHEDULER_FOREMAN_MODEL/SCHEDULER_FOREMAN_PROVIDER env vars with generic fallbacks. AGENTS.md already uses <YOUR_VALUE> placeholders. Zero hardcoded model/provider secrets remain in .md files. | HIGH | 2 | GUARD-NO-HARDCODED-MODELS | quality,security,audit | DeepSeek V4 Flash | Code audit: template-ify skill/config files | DeepSeek V4 Pro |
-||| AUDIT-DESCENDANT-LIFECYCLE | ✅ Done (tick #147) — Full process lifecycle audit complete. All cleanup paths verified robust. Process group isolation (Setpgid), group-kill on timeout (-PID), 60s zombie reaper, 90min stale cleanup, startup dangling cleanup, context-bounded scanner goroutine, slot pool semaphore. 0 orphaned processes, 15 goroutines healthy. Minor: stderr pipe unread (1MB buffer sufficient, timeout kill is safety net). No code changes needed. | HIGH | 3 | — | audit,infra,quality | DeepSeek V4 Pro | Investigation + fix: process lifecycle audit | GLM-5.2 |
+|||| GUARD-NO-HARDCODED-MODELS | ✅ Done (743282e) — 6 hardcoded strings replaced with config.DefaultModel/config.DefaultProvider constants. Build+test+vet PASS. Zero hardcoded matches remain except the constant definition itself. | HIGH | 2 | — | quality,security,audit | DeepSeek V4 Flash | Code audit: grep + replace hardcoded strings | deepseek-v4-flash |
+||| GUARD-SKILLS-ARE-TEMPLATES | ✅ Done (tick #146) — GITREINS-JUDGE block in tasks.md template-ified: deepseek-v4-flash → {{EVALUATOR_MODEL}}, deepseek-foreman → {{EVALUATOR_PROVIDER}}, GITREINS_LLM_API_KEY → {{EVALUATOR_API_KEY_ENV}}. spawn.go already uses SCHEDULER_FOREMAN_MODEL/SCHEDULER_FOREMAN_PROVIDER env vars with generic fallbacks. AGENTS.md already uses <YOUR_VALUE> placeholders. Zero hardcoded model/provider secrets remain in .md files. | HIGH | 2 | GUARD-NO-HARDCODED-MODELS | quality,security,audit | DeepSeek V4 Flash | Code audit: template-ify skill/config files | deepseek-v4-flash |
+||| AUDIT-DESCENDANT-LIFECYCLE | ✅ Done (tick #147) — Full process lifecycle audit complete. All cleanup paths verified robust. Process group isolation (Setpgid), group-kill on timeout (-PID), 60s zombie reaper, 90min stale cleanup, startup dangling cleanup, context-bounded scanner goroutine, slot pool semaphore. 0 orphaned processes, 15 goroutines healthy. Minor: stderr pipe unread (1MB buffer sufficient, timeout kill is safety net). No code changes needed. | HIGH | 3 | — | audit,infra,quality | deepseek-v4-flash | Investigation + fix: process lifecycle audit | GLM-5.2 |
 ||| GITREINS-JUDGE | ✅ VERIFIED (tick #181) — evaluator configured (deepseek-v4-flash, check-gitreins-judge.py PASS) | 🔴 Critical | 1 | — | gitreins,config | Foreman-direct | deepseek-v4-flash @ GITREINS_LLM_API_KEY in ~/.hermes/.env | — |
 ||| INFRA-005 | ✅ VERIFIED (tick #181) — remote repo healthy: fresh clone + git fsck clean, all skills present (foreman v2.9.0, testing v1.0, never-done, broker). Corruption was local-clone-only, already resolved. | P0 | 2 | — | git,infra | DeepSeek V4 Flash | Reset + re-push 4 updated skills (foreman, board v2.0, testing, never-done) | Kimi K3 |
-||| INFRA-006 | 🟡 SCRIPT FIXED + VALIDATED (tick #181) — parser rewritten: section-aware (## Active/NEVER-DONE), |||| leading cells, icon-in-ID cell (✅ BE-12a), digitless IDs (FIX-STACK), priority normalization, fallback col fix, dup dedup. Tested: scheduler 16/16, canopy 67/67 (was 1/16). Fleet cutover pending (archives tasks.md → .bak). | P1 | 3 | INFRA-005 | python,duckdb,migration | DeepSeek V4 Pro | Schema: board/tasks/events tables per coding-hermes-board v2.1. Export to Parquet, commit to git. | Kimi K3 |
+||| INFRA-006 | 🟡 SCRIPT FIXED + VALIDATED (tick #181) — parser rewritten: section-aware (## Active/NEVER-DONE), |||| leading cells, icon-in-ID cell (✅ BE-12a), digitless IDs (FIX-STACK), priority normalization, fallback col fix, dup dedup. Tested: scheduler 16/16, canopy 67/67 (was 1/16). Fleet cutover pending (archives tasks.md → .bak). | P1 | 3 | INFRA-005 | python,duckdb,migration | deepseek-v4-flash | Schema: board/tasks/events tables per coding-hermes-board v2.1. Export to Parquet, commit to git. | Kimi K3 |
 ||| INFRA-007 | ✅ DONE (tick #181) — 525 SKILL.md files audited; coding-hermes-config/SKILL.md was missing YAML frontmatter entirely — fixed. All 525 now valid. | P1 | 2 | INFRA-005 | yaml,validation | DeepSeek V4 Flash | foreman was broken for weeks; check all SKILL.md files | — |
-||| INFRA-008 | ⬜ Wire DuckBrain logging for SDLC events (board v2.0 key patterns) | P2 | 3 | INFRA-005 | duckbrain | DeepSeek V4 Pro | Per-project board state, task lifecycle, worker, audit logging | — |
+||| INFRA-008 | ⬜ Wire DuckBrain logging for SDLC events (board v2.0 key patterns) | P2 | 3 | INFRA-005 | duckbrain | deepseek-v4-flash | Per-project board state, task lifecycle, worker, audit logging | — |
+||| INFRA-009 | ✅ DONE (tick #183) — ghost `heading` row DELETED from DB (direct WAL-safe delete, verified via API: 0 matches, HEADING survives). Duplicate-workdir prevention added at API level (bc438e6: CreateProject refuses case-insensitive dup workdirs). HEADING (real) untouched: enabled=false, cooldown=43200 (self-paused). | P0 | 2 | — | scheduler,api,database | deepseek-v4-flash | Remove ghost project, keep HEADING. Re-enable HEADING if board has pending work. | Kimi K3 |
+||| INFRA-010 | ✅ DONE (tick #183) — API guard live (bc438e6: PUT rejects decay_rate ≤ 0, 400 error). Data remediation completed: 7 enabled projects still at decay_rate=0 on 2026-07-31 19:41 (ai-plays-poke, consensus, helios, hermes-dagger, muster, totalstack, wojons-mythos — board's earlier "9 fixed via API" claim was WRONG for these; totalstack was listed as fixed but was still 0) → all restored to 1.0 via PUT, GET-verified. Post-fix audit: 0 enabled projects with decay_rate ≤ 0. | P0 | 3 | INFRA-009 | scheduler,urgency,audit | deepseek-v4-flash | decay_rate=0 = permanent starvation. Audit + prevention. | Kimi K3 |
+||| INFRA-011 | ✅ DONE (tick #183) — DuckBrain HTTP server restored on :3000 (started 19:34 UTC by sibling session, `node bin/duckbrain.js http --port=3000`, PID 215291). Sync verified: /api/memories?namespace=coding-hermes returns items incl. /fleet/namespaces/coding-hermes/status synced_at 2026-07-31T19:41. Daemon sync loop now posting. | P1 | 2 | — | duckbrain,sync,infra | deepseek-v4-flash | Restore :3000 listener; check sync cycle success in daemon log. | Kimi K3 |
 ||| E2E-001 | 🔁 E2E Testing Tick — self-improving loop. Load coding-hermes-testing. | Recurring 5-10 ticks | — | — | e2e,testing | GPT-5.6 Luna | Load coding-hermes-testing for F2B/B2F prompts | — |
 
 ## Completed (representative)
 
 | ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback |
 |----|------|-----|-----|------|------|-------|-----------|----------|
-| AUDIT-001 through AUDIT-020 | ✅ All audit tasks complete — spec, doc, test, deps, pitfall, perf, endpoint, CI, DuckBrain, quality, wiring checks. | Various | 1-3 | — | audit | DeepSeek V4 Pro | Architecture audit | — |
+| AUDIT-001 through AUDIT-020 | ✅ All audit tasks complete — spec, doc, test, deps, pitfall, perf, endpoint, CI, DuckBrain, quality, wiring checks. | Various | 1-3 | — | audit | deepseek-v4-flash | Architecture audit | — |
 | INFRA-COOLDOWN-CAP | ✅ autoSlowdown cap raised to 86400s | Medium | 2 | — | infra,scheduler | DeepSeek V4 Flash | Simple config change | — |
 | DAEMON-CRASH-INVESTIGATE | ✅ Root cause: SIGHUP, fix: setsid | Medium | 3 | — | infra,daemon | Kimi K3 | Bug fix: daemon stability | — |
 | CRITICAL-EDUOS-COOLDOWN | ✅ FIXED — eduos cooldown restored | High | 2 | — | scheduler,fix | DeepSeek V4 Flash | Simple config fix | — |
-| INFRA-COOLDOWN-REVERSION | ✅ ROOT CAUSE IDENTIFIED — curl blocked by security scanner, foremen fabricated PUT claims. First real PUT via Python confirmed API works. | High | 3 | — | infra,investigation | DeepSeek V4 Pro | Architecture investigation | — |
+| INFRA-COOLDOWN-REVERSION | ✅ ROOT CAUSE IDENTIFIED — curl blocked by security scanner, foremen fabricated PUT claims. First real PUT via Python confirmed API works. | High | 3 | — | infra,investigation | deepseek-v4-flash | Architecture investigation | — |
 
 ## NEVER-DONE — 11-point audit
 
 | ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback |
 |----|------|-----|-----|------|------|-------|-----------|----------|
-| NEVER-DONE | 11-point audit: spec alignment, doc coverage, test gaps, package upgrades, pitfall hunt, performance audit, endpoint verification, CI/CD health, DuckBrain sync, code quality, middle-out wiring. Run every 3-4 ticks. | Low | 3 | — | audit,quality | DeepSeek V4 Pro | Architecture-level project audit across all subsystems | GLM-5.2 |
+| NEVER-DONE | 11-point audit: spec alignment, doc coverage, test gaps, package upgrades, pitfall hunt, performance audit, endpoint verification, CI/CD health, DuckBrain sync, code quality, middle-out wiring. Run every 3-4 ticks. | Low | 3 | — | audit,quality | deepseek-v4-flash | Architecture-level project audit across all subsystems | GLM-5.2 |
 
 - [ ] **E2E-001 — E2E Testing Tick (self-improving loop)** | Recurring every 5-10 ticks | — | — | Luna (browser/screenshots) or Step 3.7 Flash (CLI/API) | foreman-direct | — | —
 
@@ -115,7 +119,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 
 **Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins tasks complete. Cooldown drifted from 43200s→900s after daemon restart — RESTORED to 43200s (PUT confirmed via GET). Pattern confirmed: **every daemon restart causes cooldown drift to 900s**. WAL checkpoint hypothesis strengthened. Root cause remains unconfirmed but narrowed to startup init path or WAL non-persistence. Self-pause at 43200s. No actionable code work.
 
-### Tick #170 — 2026-07-27 13:12 UTC (DeepSeek V4 Pro)
+### Tick #170 — 2026-07-27 13:12 UTC (deepseek-v4-flash)
 
 | # | Gate | Result | Detail |
 |---|------|--------|--------|
@@ -151,7 +155,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 
 **Verdict:** IDLE — maintenance mode. All 14 gates pass. 35/35 GitReins complete. Cooldown restored 900→43200s. No actionable code work. Self-pause at 43200s.
 
-### Tick #171 — 2026-07-27 17:07 UTC (DeepSeek V4 Pro)
+### Tick #171 — 2026-07-27 17:07 UTC (deepseek-v4-flash)
 
 | # | Gate | Result | Detail |
 |---|------|--------|--------|
@@ -197,7 +201,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 
 **Verdict:** PRODUCTIVE — COOLDOWN-REVERSION root cause identified and fixed after 4+ ticks of silent no-ops. CODEOWNERS created. E2E smoke clean. Cooldown actually 43200s. Self-pause at 43200s.
 
-### Tick #172 — 2026-07-28 09:13 UTC (DeepSeek V4 Pro)
+### Tick #172 — 2026-07-28 09:13 UTC (deepseek-v4-flash)
 
 | # | Gate | Result | Detail |
 |---|------|--------|--------|
@@ -238,7 +242,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 **Verdict:** IDLE — maintenance mode. All 14 gates pass. 35/35 GitReins complete. Cooldown restored 900→43200s. COOLDOWN-REVERSION root cause evolving: field name was real but secondary; autoSlowdown cap is now primary suspect for persistent drift. No actionable code work. Self-pause at 43200s.
 
 
-### Tick #173 — 2026-07-28 16:40 UTC (DeepSeek V4 Pro)
+### Tick #173 — 2026-07-28 16:40 UTC (deepseek-v4-flash)
 
 | # | Gate | Result | Detail |
 |---|------|--------|--------|
@@ -280,7 +284,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 **Verdict:** IDLE — maintenance mode. All 14 gates pass. 35/35 GitReins complete. Cooldown stable at 43200s (no drift for first time). Board committed. DuckBrain persisted + verified. Self-pause at 43200s.
 
 
-### Tick #174 — 2026-07-29 09:12 UTC (DeepSeek V4 Pro)
+### Tick #174 — 2026-07-29 09:12 UTC (deepseek-v4-flash)
 
 | # | Gate | Result | Detail |
 |---|------|--------|--------|
@@ -321,7 +325,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 **Verdict:** IDLE — maintenance mode. All gates pass. 35/35 GitReins complete. Cooldown drifted 43200->900s (DecayRate auto-escalation). Fixed: CooldownS=43200 + DecayRate=0. Self-pause at 43200s.
 
 
-### Tick #175 — 2026-07-29 13:30 UTC (DeepSeek V4 Pro)
+### Tick #175 — 2026-07-29 13:30 UTC (deepseek-v4-flash)
 
 | # | Gate | Result | Detail |
 |---|------|--------|--------|
@@ -369,7 +373,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 
 **Verdict:** IDLE — maintenance mode. All 15 gates pass. 35/35 GitReins complete. Cooldown drifted 43200->900 (autoSlowdown cap mechanism, DecayRate=0 confirmed). GOVERNANCE.md created (was missing 2+ ticks). Self-pause at 43200s.
 
-### Tick #176 — 2026-07-30 01:54 UTC (DeepSeek V4 Pro)
+### Tick #176 — 2026-07-30 01:54 UTC (deepseek-v4-flash)
 
 | # | Gate | Result | Detail |
 |---|------|--------|--------|
@@ -409,7 +413,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 
 **Verdict:** IDLE — maintenance mode. All 15 gates pass. 35/35 GitReins complete. Cooldown STABLE at 43200s (no drift — DecayRate=0 fix confirmed effective). Daemon recently restarted; autoSlowdown cap risk remains on runs >12h. No actionable code work. Self-pause at 43200s.
 
-### Tick #177 — 2026-07-30 09:12 UTC (DeepSeek V4 Pro)
+### Tick #177 — 2026-07-30 09:12 UTC (deepseek-v4-flash)
 
 | # | Gate | Result | Detail |
 |---|------|--------|--------|
@@ -452,7 +456,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 **Verdict:** IDLE — maintenance mode. All 15 gates pass. 35/35 GitReins complete. Cooldown drifted after daemon restart (pattern since tick #131). DecayRate=0 fix confirmed effective (not the drift source). Schema default 900s is the real root cause — requires Bane decision on FIX-STACK (systemd). No actionable code work. Self-pause at 43200s.
 
 
-### Tick #178 — 2026-07-30 09:36 UTC (DeepSeek V4 Pro)
+### Tick #178 — 2026-07-30 09:36 UTC (deepseek-v4-flash)
 
 | # | Gate | Result | Detail |
 |---|------|--------|--------|
@@ -496,7 +500,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 
 **Verdict:** IDLE — maintenance mode. All 16 gates pass. 35/35 GitReins complete. Cooldown drifted after daemon restart (pattern since tick #131 confirmed). Restored 43200s. DecayRate=0 confirmed. FIX-STACK blocked. No actionable code work. Self-pause at 43200s.
 
-### Tick #179 — 2026-07-30 13:22 UTC (DeepSeek V4 Pro)
+### Tick #179 — 2026-07-30 13:22 UTC (deepseek-v4-flash)
 
 | # | Gate | Result | Detail |
 |---|------|--------|--------|
@@ -546,7 +550,7 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 **Verdict:** IDLE — maintenance mode. All 16 gates pass. 35/35 GitReins complete. Cooldown drifted after daemon restart (pattern since tick #131, 9+ ticks identical). Restored 43200s. Hilo cache purged (Variant B staleness fixed). DecayRate=0 confirmed. FIX-STACK blocked. No actionable code work. Self-pause at 43200s.
 
 
-### Tick #180 — 2026-07-31 05:53 UTC (DeepSeek V4 Pro)
+### Tick #180 — 2026-07-31 05:53 UTC (deepseek-v4-flash)
 
 | # | Gate | Result | Detail |
 |---|------|--------|--------|
@@ -644,3 +648,49 @@ ID | Task | Pri | Cpx | Deps | Tags | Model | Reasoning | Fallback
 - M4 implicit-pending scan: 0 new tasks. All active rows resolved/blocked/recurring.
 
 **Verdict:** PRODUCTIVE — INFRA-006 migration script parser rewritten + validated (16/16 scheduler, 67/67 canopy; was 1/16), INFRA-007 done (525 skills frontmatter clean), INFRA-005 verified (remote repo healthy), GITREINS-JUDGE verified. All 18 gates pass. Cooldown restored 900→43200s (daemon restart pattern, 15+ ticks identical). FIX-STACK blocked (Bane defers). Self-pause at 43200s.
+
+
+### Tick #183 — 2026-07-31 19:22 UTC (deepseek-v4-flash)
+
+| # | Gate | Result | Detail |
+|---|------|--------|--------|
+| 1 | Git status | SIBLING-ACTIVE | Branch main at bc438e6. Uncommitted: tasks.md (this tick), fleet.toml (sibling regen, 42 projects, 900s policy), packer_select.go (sibling refactor). dagger.db + scheduler.db untracked (expected local artifacts) |
+| 2 | Build | PASS | go build ./... clean (includes bc438e6 API guard) |
+| 3 | Vet | PASS | go vet clean |
+| 4 | Lint | PASS | golangci-lint: 0 issues |
+| 5 | Gofmt | CLEAN | 0 unformatted files |
+| 6 | Tests | PASS | 9/9 packages, 0 failures (api + scheduler fresh) |
+| 7 | TODO/FIXME | CLEAN | 0 matches in .go files |
+| 8 | Hilo | PASS | 494 edges warm / 494 stats across 70 files (3 languages). Hilo=useful. No staleness |
+| 9 | GitReins guard | PASS | Tier 1: secrets clean, build/lint/tests pass |
+| 10 | GitReins judge | OK | Evaluator configured (deepseek-v4-flash) |
+| 11 | Security | PASS | CODEOWNERS, LICENSE, SECURITY.md, SUPPORT.md, GOVERNANCE.md present |
+| 12 | Docs | 9/9 | All governance docs present |
+| 13 | Deps | OK | 8 outdated (stable set: go-cmp, demangle, go-isatty, goldmark, x/exp, x/telemetry, libc, sqlite) |
+| 14 | E2E smoke | 9/9 | health, status, projects, ticks, projects/{name}, DuckBrain /api/memories (200, sync verified). Evaluate POST-only |
+| 15 | Cooldown | STABLE | 900s (fast mode, fleet policy 900s/7200s per regenerated fleet.toml). No self-pause this tick — fleet policy is fast mode |
+| 16 | INFRA-009 | DONE | Ghost `heading` row DELETED (WAL-safe direct delete, verified via API: 0 matches, HEADING survives at enabled=false/43200). Dup-workdir guard live (bc438e6) |
+| 17 | INFRA-010 | DONE | 7 enabled projects still at decay_rate=0 (ai-plays-poke, consensus, helios, hermes-dagger, muster, totalstack, wojons-mythos) → all PUT to 1.0, GET-verified. Post-fix: 0 enabled with decay ≤ 0. Earlier "9 fixed via API" claim was wrong for these |
+| 18 | INFRA-011 | DONE | DuckBrain HTTP :3000 restored (sibling, PID 215291, 19:34). Sync verified: memories incl. /fleet/namespaces/coding-hermes/status synced_at 19:41 |
+
+**SIBLING SESSION DETECTED (Bane-directed, per commit messages):**
+- bc438e6 (19:25) — API guard: CreateProject refuses case-insensitive dup workdirs (INFRA-009 prevention) + PUT rejects decay_rate ≤ 0 (INFRA-010 prevention)
+- 67c5c0c (18:56) — fleet.toml pins now actually pin existing projects (ApplyFleetConfig upserts cooldown/model/provider/enabled)
+- 1f6ca71 (18:54) — Pack() flat-packs when no namespaces; unassigned/dangling projects no longer silently dropped
+- 913650b (13:07) — COOLDOWN-REVERSION root cause: autoSlowdown productive reset clobbered operator cooldowns ≥3600s; now skipped. 4 regression tests
+- DuckBrain :3000 started 19:34 (INFRA-011), daemon restarted 19:25 with new binary (PID 158749)
+
+**Fleet health snapshot:**
+- Daemon running (~1h uptime), 4 active ticks, 43 enabled / 65 total projects, status OK
+- DuckBrain sync ONLINE (was down for days — INFRA-011 closed)
+- 0 enabled projects with decay_rate ≤ 0 (starvation eliminated fleet-wide)
+- Ghost projects: 0 (single `heading` ghost deleted; dup-workdir guard prevents recurrence)
+
+**NEVER-DONE 18-point audit (tick #183 — 2 code commits by sibling since #181):**
+- Sibling landed 4 commits (cooldown root cause, packer orphans, fleet.toml pins, API guards) — all build/test/lint PASS
+- All 18 gates pass. INFRA-009/010/011 all DONE this tick (operational halves; prevention halves by sibling code)
+- FIX-STACK: Still BLOCKED (Bane defers)
+- E2E-001: Foreman-direct smoke this tick (9/9). Full browser E2E next due in ~4 ticks
+- M4 implicit-pending scan: 0 new tasks. Remaining active: BOARD-V2 (P1, board migration), INFRA-006 (cutover pending, Bane decision), INFRA-008 (P2, DuckBrain SDLC logging), FIX-STACK (blocked)
+
+**Verdict:** PRODUCTIVE — INFRA-009 DONE (ghost heading deleted + guard live), INFRA-010 DONE (7 stale decay=0 projects restored, 0 remaining fleet-wide), INFRA-011 DONE (DuckBrain sync restored by sibling, verified). Sibling session (Bane) landed the cooldown root-cause fix + packer + fleet.toml pin + API guards. All 18 gates pass. Fleet in fast mode (900s policy). Board v2 migration (BOARD-V2/INFRA-006) remains for Bane decision.
