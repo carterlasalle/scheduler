@@ -207,9 +207,26 @@ func main() {
 	}
 
 	// Create all components.
+	// DuckBrain sync is created up-front so its health can be surfaced in
+	// /api/v1/status (fallback state: reachable, spool depth). Its Run loop
+	// starts later in background (see below).
+	duckbrain := sync.NewDuckBrainSync(db, *duckbrainNS, *duckbrainURL)
 	apiServer := api.NewServer(db, loop)
+	apiServer.SetDuckBrainHealth(func() map[string]interface{} {
+		h := duckbrain.Health()
+		return map[string]interface{}{
+			"reachable":            h.Reachable,
+			"consecutive_failures": h.ConsecutiveErr,
+			"last_error":           h.LastError,
+			"last_ok_at":           h.LastOKAt,
+			"spooled_pending":      h.Spooled,
+			"base_url":             h.BaseURL,
+			"interval":             h.Interval,
+		}
+	})
 	mcpServer := mcp.NewServer(db, loop)
 	dashGen := dashboard.NewGenerator(db, *gatewayURL)
+	dashGen.SetDuckBrainURL(*duckbrainURL)
 
 	// Compose all handlers into one mux.
 	mux := http.NewServeMux()
@@ -325,7 +342,6 @@ func main() {
 
 	// Start DuckBrain sync in background.
 	go func() {
-		duckbrain := sync.NewDuckBrainSync(db, *duckbrainNS, *duckbrainURL)
 		duckbrain.Run(context.Background())
 	}()
 

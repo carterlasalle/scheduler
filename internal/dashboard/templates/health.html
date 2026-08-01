@@ -48,6 +48,12 @@ h1{font-size:1.5rem;margin-bottom:4px}h2{font-size:1.1rem;margin:24px 0 8px}
 {{if .GatewayURL}}<div class="meta">{{.GatewayURL}}</div>{{end}}
 </div>
 <div class="card">
+<div class="label">DuckBrain</div>
+<div class="value {{if eq .DuckBrainStatus "connected"}}status-ok{{else if eq .DuckBrainStatus "not configured"}}status-warn{{else}}status-fail{{end}}">{{.DuckBrainStatus}}</div>
+{{if .DuckBrainBaseURL}}<div class="meta">{{.DuckBrainBaseURL}}</div>{{end}}
+{{if gt .DuckBrainSpooled 0}}<div class="meta status-warn">⚠ {{.DuckBrainSpooled}} spooled write(s) pending replay</div>{{end}}
+</div>
+<div class="card">
 <div class="label">Uptime</div>
 <div class="value">{{.Uptime}}</div>
 </div>

@@ -124,18 +124,21 @@ type NamespaceViewData struct {
 	Utilization     float64
 }
 
-// HealthData holds daemon, database, and gateway liveness information.
+// HealthData holds daemon, database, gateway, and DuckBrain liveness info.
 type HealthData struct {
-	GeneratedAt    string
-	DaemonStatus   string
-	DatabaseStatus string
-	GatewayStatus  string
-	GatewayURL     string
-	Uptime         string
-	ActiveTicks    int
-	TotalTicks     int
-	Goroutines     int
-	MemoryMB       float64
+	GeneratedAt      string
+	DaemonStatus     string
+	DatabaseStatus   string
+	GatewayStatus    string
+	GatewayURL       string
+	DuckBrainStatus  string
+	DuckBrainBaseURL string
+	DuckBrainSpooled int
+	Uptime           string
+	ActiveTicks      int
+	TotalTicks       int
+	Goroutines       int
+	MemoryMB         float64
 }
 
 func (g *Generator) collect(ctx context.Context) FleetData {

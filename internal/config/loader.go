@@ -460,19 +460,19 @@ func projectFromDef(pd ProjectDef) *database.Project {
 	}
 
 	p := &database.Project{
-		Name:        pd.Name,
-		RepoURL:     pd.RepoURL,
-		Workdir:     pd.Workdir,
-		Weight:      weight,
-		Priority:    priority,
-		CooldownS:   cooldown,
-		DecayRate:   decay,
-		Model:       model,
-		Provider:    provider,
-		GatewayKey:  pd.GatewayKey,
-		Command:     pd.Command,
-		Deliver:     pd.Deliver,
-		Enabled:     enabled,
+		Name:       pd.Name,
+		RepoURL:    pd.RepoURL,
+		Workdir:    pd.Workdir,
+		Weight:     weight,
+		Priority:   priority,
+		CooldownS:  cooldown,
+		DecayRate:  decay,
+		Model:      model,
+		Provider:   provider,
+		GatewayKey: pd.GatewayKey,
+		Command:    pd.Command,
+		Deliver:    pd.Deliver,
+		Enabled:    enabled,
 	}
 	if pd.NamespaceID != "" {
 		nsID := pd.NamespaceID
