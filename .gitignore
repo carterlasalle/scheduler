@@ -26,3 +26,4 @@ deploy/*.log
 .coding-hermes/
 !.coding-hermes/tasks.md
 .gitreins/history/
+dagger.db
