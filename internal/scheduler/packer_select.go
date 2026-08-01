@@ -345,9 +345,7 @@ func (m *MultiPoolPacker) Pack(
 		}
 		flat := m.packFlat(unassigned, urgencyCalc, lastCompleted, runningSet,
 			remainingBudget, globalSelected, now)
-		for _, p := range flat {
-			result.Projects = append(result.Projects, p)
-		}
+		result.Projects = append(result.Projects, flat...)
 		if len(flat) < len(unassigned) {
 			var dropped []string
 			picked := make(map[string]bool, len(flat))
