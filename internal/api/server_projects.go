@@ -51,6 +51,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 409, "project already exists")
 			return
 		}
+		if strings.Contains(err.Error(), "already registered by enabled project") {
+			writeError(w, 409, err.Error())
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -121,6 +125,14 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 	var updates database.ProjectUpdates
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		writeError(w, 400, "invalid JSON: "+err.Error())
+		return
+	}
+	// DecayRate guard: 0 makes urgency flat (priority × 1^0) so the project is
+	// never picked by the packer — a silent permanent starvation. Foremen must
+	// not be able to do this to themselves. Proven: dexdat-memory starved 87h
+	// with a valid namespace + 900s cooldown because decay_rate was 0.
+	if updates.DecayRate != nil && *updates.DecayRate <= 0 {
+		writeError(w, 400, "decay_rate must be > 0 (0 causes permanent starvation — urgency never grows)")
 		return
 	}
 	if err := database.UpdateProject(context.Background(), s.db, name, updates); err != nil {
