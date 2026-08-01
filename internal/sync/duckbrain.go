@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/coding-herms/scheduler/internal/database"
 )
 
 // DuckBrainSync pushes fleet state to DuckBrain as a read replica
@@ -56,7 +58,8 @@ func (d *DuckBrainSync) Run(ctx context.Context) {
 	}
 }
 
-// syncOnce runs one sync cycle: fleet summary + per-project statuses + namespaces.
+// syncOnce runs one sync cycle: fleet summary + per-project statuses + namespaces
+// + SDLC events + tick lifecycle.
 func (d *DuckBrainSync) syncOnce(ctx context.Context) {
 	log.Println("SYNC: running sync cycle")
 
@@ -74,6 +77,14 @@ func (d *DuckBrainSync) syncOnce(ctx context.Context) {
 
 	if err := d.syncNamespaceStatuses(ctx); err != nil {
 		log.Printf("SYNC: namespace statuses error: %v", err)
+	}
+
+	if err := d.syncSDLC(ctx); err != nil {
+		log.Printf("SYNC: sdlc events error: %v", err)
+	}
+
+	if err := d.syncTickLifecycle(ctx); err != nil {
+		log.Printf("SYNC: tick lifecycle error: %v", err)
 	}
 }
 
@@ -248,6 +259,119 @@ func (d *DuckBrainSync) syncNamespaceStatuses(ctx context.Context) error {
 		key := "/fleet/namespaces/" + id + "/status"
 		if err := d.postMemory(ctx, key, "config", status); err != nil {
 			log.Printf("SYNC: post namespace %s: %v", id, err)
+		}
+	}
+	return rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// SDLC event sync
+// ---------------------------------------------------------------------------
+
+// sdlcEventLimit caps how many recent SDLC events are pushed per cycle.
+const sdlcEventLimit = 50
+
+// sdlcEvent is the payload sent to DuckBrain for a single event log entry.
+// Field names mirror the database.Event struct.
+type sdlcEvent struct {
+	ID        int64  `json:"id"`
+	Severity  string `json:"severity"`
+	Component string `json:"component"`
+	Message   string `json:"message"`
+	Details   string `json:"details"`
+	CreatedAt string `json:"created_at"`
+}
+
+// syncSDLC queries the most recent SDLC events from the event log and pushes
+// one memory each to DuckBrain under /fleet/events/<id>. Per-event post
+// failures are logged and skipped; the cycle never aborts on a single error.
+func (d *DuckBrainSync) syncSDLC(ctx context.Context) error {
+	events, err := database.ListEvents(ctx, d.db, "", "", sdlcEventLimit, 0)
+	if err != nil {
+		return fmt.Errorf("list sdlc events: %w", err)
+	}
+
+	for _, e := range events {
+		payload := sdlcEvent{
+			ID:        e.ID,
+			Severity:  string(e.Severity),
+			Component: e.Component,
+			Message:   e.Message,
+			Details:   e.Details,
+			CreatedAt: e.CreatedAt,
+		}
+
+		key := fmt.Sprintf("/fleet/events/%d", e.ID)
+		if err := d.postMemory(ctx, key, "event", payload); err != nil {
+			log.Printf("SYNC: post event %d: %v", e.ID, err)
+			// Continue to next event even if one fails.
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Tick lifecycle sync
+// ---------------------------------------------------------------------------
+
+// tickLifecycleLimit caps how many recent ticks are pushed per cycle.
+const tickLifecycleLimit = 25
+
+// tickLifecycle is the payload sent to DuckBrain for a single tick lifecycle
+// record. Field names mirror the database.Tick struct.
+type tickLifecycle struct {
+	ID           string  `json:"id"`
+	ProjectName  string  `json:"project_name"`
+	Status       string  `json:"status"`
+	Outcome      string  `json:"outcome"`
+	SpawnedAt    string  `json:"spawned_at"`
+	CompletedAt  string  `json:"completed_at"`
+	ExitCode     int     `json:"exit_code"`
+	Commits      int     `json:"commits"`
+	FilesChanged int     `json:"files_changed"`
+	CostUSD      float64 `json:"cost_usd"`
+	Urgency      float64 `json:"urgency"`
+	Error        string  `json:"error"`
+}
+
+// syncTickLifecycle queries the most recent ticks (newest-first) and pushes
+// one memory each to DuckBrain under /fleet/projects/<name>/ticks/<id>.
+// NULL columns are coalesced to zero values, matching syncProjectStatuses.
+// Per-tick post failures are logged and skipped; the cycle never aborts on a
+// single error.
+func (d *DuckBrainSync) syncTickLifecycle(ctx context.Context) error {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, project_name, status,
+			COALESCE(outcome, ''),
+			COALESCE(spawned_at, ''),
+			COALESCE(completed_at, ''),
+			COALESCE(exit_code, 0),
+			COALESCE(commits, 0),
+			COALESCE(files_changed, 0),
+			COALESCE(cost_usd, 0.0),
+			COALESCE(urgency, 0.0),
+			COALESCE(error, '')
+		FROM ticks
+		ORDER BY created_at DESC, id DESC
+		LIMIT ?`, tickLifecycleLimit)
+	if err != nil {
+		return fmt.Errorf("query ticks: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var t tickLifecycle
+		if err := rows.Scan(&t.ID, &t.ProjectName, &t.Status,
+			&t.Outcome, &t.SpawnedAt, &t.CompletedAt, &t.ExitCode,
+			&t.Commits, &t.FilesChanged, &t.CostUSD, &t.Urgency, &t.Error); err != nil {
+			log.Printf("SYNC: scan tick row: %v", err)
+			continue
+		}
+
+		key := "/fleet/projects/" + t.ProjectName + "/ticks/" + t.ID
+		if err := d.postMemory(ctx, key, "event", t); err != nil {
+			log.Printf("SYNC: post tick %s: %v", t.ID, err)
+			// Continue to next tick even if one fails.
 		}
 	}
 	return rows.Err()
