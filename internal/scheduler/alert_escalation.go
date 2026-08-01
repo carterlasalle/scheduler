@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -184,7 +185,50 @@ func (ae *AlertEscalator) CheckConsecutiveFailures(ctx context.Context) error {
 	return nil
 }
 
-// RunAll executes all three escalation checks. Errors from individual checks
+// CheckDuplicateWorkdirs emits HIGH for any pair of ENABLED projects sharing
+// the same workdir. Two active foremen pointing at one directory split ticks
+// unpredictably and can both commit to the same board (INFRA-009: ghost
+// project `heading` duplicated `HEADING`'s workdir, spawned a tick, and
+// committed into HEADING's repo). The create-path guard (database/projects.go)
+// prevents new duplicates; this check flags any that already exist so the
+// fleet audit surfaces them instead of letting them run silently.
+func (ae *AlertEscalator) CheckDuplicateWorkdirs(ctx context.Context) error {
+	prows, err := ae.db.QueryContext(ctx,
+		`SELECT name, workdir FROM projects WHERE enabled = 1 AND workdir != '' ORDER BY workdir, name`)
+	if err != nil {
+		return fmt.Errorf("query enabled projects: %w", err)
+	}
+	defer prows.Close()
+
+	byWorkdir := make(map[string][]string)
+	for prows.Next() {
+		var name, workdir string
+		if err := prows.Scan(&name, &workdir); err != nil {
+			log.Printf("ESCALATION: scan workdir project: %v", err)
+			continue
+		}
+		key := strings.ToLower(workdir)
+		byWorkdir[key] = append(byWorkdir[key], name)
+	}
+	if err := prows.Err(); err != nil {
+		return fmt.Errorf("iter workdir projects: %w", err)
+	}
+
+	for wd, names := range byWorkdir {
+		if len(names) < 2 {
+			continue
+		}
+		ae.events.Emit(ctx, SeverityHigh, "escalation",
+			fmt.Sprintf("duplicate workdir: %d enabled projects share %s", len(names), wd),
+			map[string]any{
+				"workdir":  wd,
+				"projects": names,
+			})
+	}
+	return nil
+}
+
+// RunAll executes all four escalation checks. Errors from individual checks
 // are logged but not propagated — one check failing does not block the others.
 func (ae *AlertEscalator) RunAll(ctx context.Context, lastEval time.Time) error {
 	if err := ae.CheckSchedulerHealth(ctx, lastEval); err != nil {
@@ -195,6 +239,9 @@ func (ae *AlertEscalator) RunAll(ctx context.Context, lastEval time.Time) error 
 	}
 	if err := ae.CheckConsecutiveFailures(ctx); err != nil {
 		log.Printf("ESCALATION: consecutive failures check error: %v", err)
+	}
+	if err := ae.CheckDuplicateWorkdirs(ctx); err != nil {
+		log.Printf("ESCALATION: duplicate workdir check error: %v", err)
 	}
 	return nil
 }

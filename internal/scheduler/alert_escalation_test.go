@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +21,8 @@ func setupTestDB(t *testing.T) *sql.DB {
 		CREATE TABLE IF NOT EXISTS projects (
 			name TEXT PRIMARY KEY,
 			enabled INTEGER DEFAULT 1,
-			cooldown_s INTEGER DEFAULT 1800
+			cooldown_s INTEGER DEFAULT 1800,
+			workdir TEXT DEFAULT ''
 		);
 		CREATE TABLE IF NOT EXISTS ticks (
 			id TEXT PRIMARY KEY,
@@ -229,6 +231,59 @@ func TestAlertEscalator_CheckConsecutiveFailures_BrokenStreak(t *testing.T) {
 
 	if n := countEventsBySeverity(t, db, "HIGH"); n != 0 {
 		t.Errorf("expected 0 HIGH events (streak broken), got %d", n)
+	}
+}
+
+// TestAlertEscalator_CheckDuplicateWorkdirs emits HIGH when two ENABLED
+// projects share the same workdir (case-insensitive), and stays silent for
+// unique or disabled duplicates.
+func TestAlertEscalator_CheckDuplicateWorkdirs(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Two enabled projects sharing a workdir (different case).
+	insertProject(t, db, "HEADING", 43200)
+	insertProject(t, db, "heading", 900)
+	_, err := db.Exec(`UPDATE projects SET workdir = ? WHERE name = ?`, "/home/kara/heading", "HEADING")
+	if err != nil {
+		t.Fatalf("set workdir: %v", err)
+	}
+	_, err = db.Exec(`UPDATE projects SET workdir = ? WHERE name = ?`, "/home/kara/heading", "heading")
+	if err != nil {
+		t.Fatalf("set workdir: %v", err)
+	}
+
+	// Unique workdir project — must NOT trigger.
+	insertProject(t, db, "solo", 900)
+	_, err = db.Exec(`UPDATE projects SET workdir = ? WHERE name = ?`, "/home/kara/solo", "solo")
+	if err != nil {
+		t.Fatalf("set workdir: %v", err)
+	}
+
+	// Disabled duplicate — must NOT trigger.
+	insertProject(t, db, "archived", 900)
+	_, err = db.Exec(`UPDATE projects SET workdir = ?, enabled = 0 WHERE name = ?`, "/home/kara/shared", "archived")
+	if err != nil {
+		t.Fatalf("set archived: %v", err)
+	}
+
+	events := NewEventLogger(db)
+	escalator := NewAlertEscalator(db, events)
+
+	if err := escalator.CheckDuplicateWorkdirs(context.Background()); err != nil {
+		t.Fatalf("CheckDuplicateWorkdirs: %v", err)
+	}
+
+	if n := countEventsBySeverity(t, db, "HIGH"); n != 1 {
+		t.Errorf("expected 1 HIGH event for the duplicate pair, got %d", n)
+	}
+	var msg string
+	err = db.QueryRow(`SELECT message FROM events WHERE severity = 'HIGH'`).Scan(&msg)
+	if err != nil {
+		t.Fatalf("read HIGH event: %v", err)
+	}
+	if !strings.Contains(msg, "duplicate workdir") {
+		t.Errorf("event message = %q, want duplicate-workdir mention", msg)
 	}
 }
 
