@@ -450,3 +450,20 @@ tasks:
   status: complete
   created_at: '2026-07-22T21:04:51.004900+00:00'
   completed_at: '2026-07-25T01:29:46.771008+00:00'
+- id: INFRA-008
+  title: Wire DuckBrain logging for SDLC events (board v2.0 key patterns)
+  criteria:
+  - DuckBrainSync syncs recent SDLC events from events table to DuckBrain under /fleet/events/<id>
+    with domain 'event'
+  - DuckBrainSync syncs recent tick lifecycle rows to DuckBrain under /fleet/projects/<name>/ticks/<id>
+    with domain 'event'
+  - Both new sync methods are wired into syncOnce and run every cycle
+  - NULL tick columns handled with COALESCE (no scan errors on partial rows)
+  - "Per-event post failures logged and skipped \u2014 cycle never aborts on single\
+    \ error"
+  - 'Tests added: empty-DB cases, post-verification cases, TestSyncOnce updated to
+    assert all six methods'
+  - go build ./..., go vet ./..., gofmt clean, full test suite 9/9 packages green
+  status: complete
+  created_at: '2026-08-01T14:31:55.715271+00:00'
+  completed_at: '2026-08-01T14:34:04.184324+00:00'
