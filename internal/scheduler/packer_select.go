@@ -141,6 +141,12 @@ func (m *MultiPoolPacker) Pack(
 		for i := range scored {
 			pu := &scored[i]
 
+			// Never re-pack a project whose tick is already in flight
+			// (mirror of packFlat — prevents duplicate concurrent ticks).
+			if runningSet[pu.Project.Name] {
+				continue
+			}
+
 			// Cooldown check with blackout slowdown.
 			if lt, ok := lastCompleted[pu.Project.Name]; ok {
 				cooldownDur := time.Duration(pu.Project.CooldownS) * time.Second
@@ -176,6 +182,10 @@ func (m *MultiPoolPacker) Pack(
 		// Any remaining items (after budget/concurrency break) go to queued.
 		for i := range scored {
 			pu := &scored[i]
+			// Running projects must not be queued either (no re-pack by borrowing).
+			if runningSet[pu.Project.Name] {
+				continue
+			}
 			if !puInList(pu, st.selected) && !puInList(pu, st.queued) {
 				// Check if it was skipped by cooldown — those are NOT queued.
 				if lt, ok := lastCompleted[pu.Project.Name]; ok {
@@ -246,6 +256,10 @@ func (m *MultiPoolPacker) Pack(
 		}
 
 		for _, pu := range st.queued {
+			// Running projects must not be re-packed with borrowed budget.
+			if runningSet[pu.Project.Name] {
+				continue
+			}
 			// Recalculate effective weight with the new (larger) allocation.
 			effW := CalcEffectiveWeight(pu.Project.Weight, totalWeightInNS+sumSelectedWeights(st.selected), newAlloc)
 			pu.EffectiveWeight = effW
