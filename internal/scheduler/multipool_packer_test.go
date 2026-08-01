@@ -459,6 +459,49 @@ func TestMultiPoolPacker_RunningProjectsCounted(t *testing.T) {
 	}
 }
 
+// TestMultiPoolPacker_RunningProjectsExcluded — a project with an in-flight
+// tick must NOT be selected again by the namespace-mode packer, even when its
+// cooldown has elapsed (cooldown is measured from the last COMPLETED tick).
+// Regression test for INFRA-003: namespace-mode Pack ignored runningSet in
+// the greedy/queued/borrow loops, spawning duplicate concurrent ticks
+// (ai-plays-poke tick storm, 2026-08-01).
+func TestMultiPoolPacker_RunningProjectsExcluded(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	mustCreateNamespace(t, db, makeNamespace("ns-a", 10, 5, 100, true))
+	mustCreateProjectInNS(t, db, "p1", "ns-a", 5, 5, 0, 1.0)
+	mustCreateProjectInNS(t, db, "p2", "ns-a", 5, 5, 0, 1.0)
+	mustCreateProjectInNS(t, db, "p3", "ns-a", 5, 5, 0, 1.0)
+
+	projects, err := database.ListProjects(ctx, db, true)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	namespaces, err := database.ListNamespaces(ctx, db, true)
+	if err != nil {
+		t.Fatalf("ListNamespaces: %v", err)
+	}
+
+	mp := scheduler.NewMultiPoolPacker(100, 10, nil)
+	result := mp.Pack(projects, namespaces, defaultUrgencyCalc(), nil,
+		[]string{"p1"}, time.Now())
+
+	names := make(map[string]bool, len(result.Projects))
+	for _, p := range result.Projects {
+		names[p.Name] = true
+	}
+	if names["p1"] {
+		t.Errorf("running project p1 was selected again (duplicate concurrent tick)")
+	}
+	if !names["p2"] {
+		t.Errorf("eligible project p2 was not selected")
+	}
+	if !names["p3"] {
+		t.Errorf("eligible project p3 was not selected")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // BorrowingEngine tests
 // ---------------------------------------------------------------------------
