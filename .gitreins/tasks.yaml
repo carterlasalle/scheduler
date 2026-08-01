@@ -467,3 +467,21 @@ tasks:
   status: complete
   created_at: '2026-08-01T14:31:55.715271+00:00'
   completed_at: '2026-08-01T14:34:04.184324+00:00'
+- id: INFRA-003
+  title: "Exclude running projects in namespace packing \u2014 prevent duplicate concurrent\
+    \ ticks (tick storm)"
+  criteria:
+  - Namespace-mode Pack() must skip projects whose tick is already running (runningSet
+    check in Phase 2 greedy loop)
+  - Queued-rebuild loop must not queue running projects
+  - Phase 3 borrow re-pack loop must not re-pack running projects
+  - Flat fallback (packFlat) behavior unchanged
+  - 'Regression test TestMultiPoolPacker_RunningProjectsExcluded passes: running p1
+    excluded, eligible p2/p3 selected'
+  - 'Existing tests pass: full suite go test -short -p 1 ./... all packages ok'
+  - go build ./..., go vet ./..., golangci-lint 0 issues, gofmt clean
+  - Commit a875176 with Co-authored-by trailer, path-limited to packer_select.go +
+    multipool_packer_test.go
+  status: complete
+  created_at: '2026-08-01T23:54:30.054736+00:00'
+  completed_at: '2026-08-01T23:54:33.994703+00:00'
