@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	_ "net/http/pprof" // registers handlers on DefaultServeMux
@@ -48,6 +49,7 @@ func main() {
 	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 14 dry-run projects")
 	simTicks := flag.Int("sim-ticks", 10, "Number of evaluation ticks to run in sim-setup mode")
 	configFile := flag.String("config", "", "Path to TOML fleet config file")
+	logFile := flag.String("log-file", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.log"), "Path to append structured tick logs (JSON lines); empty disables")
 	showConfigFlag := flag.Bool("show-config", false, "Print resolved config (CLI + env) as TOML and exit")
 	schemaFlag := flag.Bool("schema", false, "Output JSON Schema for schedulerd.toml and exit")
 	flag.Parse()
@@ -69,6 +71,19 @@ func main() {
 	}
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	// Persist all logs to a file as well as stdout (system-plan-v2 §1.1).
+	// Failures to open the log file are non-fatal — the daemon keeps running
+	// on stdout only rather than crashing at boot.
+	if *logFile != "" {
+		lf, lfErr := os.OpenFile(*logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if lfErr != nil {
+			log.Printf("WARN: cannot open log file %s (%v) — logging to stdout only", *logFile, lfErr)
+		} else {
+			log.SetOutput(io.MultiWriter(os.Stdout, lf))
+			log.Printf("Log file: %s", *logFile)
+		}
+	}
 
 	// Initialize database.
 	db, err := database.InitDB(*dbPath)
