@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
@@ -175,27 +176,85 @@ func sumWeights(packed []PackedProject) int {
 	return total
 }
 
+// cleanDanglingOnStartup reaps ONLY ticks whose recorded pid no longer
+// exists (exec-fallback children die with the daemon). Ticks spawned via the
+// Hermes gateway have pid=0 and their HTTP sessions SURVIVE a daemon restart —
+// they must be left 'running' (CleanupStale(90m) in the eval loop handles
+// true gateway zombies inside the stale window).
+// Regression: INFRA-012 (2026-08-01) — restart marked live gateway ticks
+// 'timeout' and the packer spawned duplicate ticks for in-flight projects.
 func (l *Loop) cleanDanglingOnStartup() {
 	ctx := context.Background()
 
-	// Update last_tick_completed for projects whose running ticks
-	// are being cleaned, so the packer uses actual last-tick time
-	// rather than created_at for urgency calculation.
+	// Only ticks with a real pid can be checked against /proc. pid=0 rows are
+	// gateway spawns whose sessions outlive this process — leave them alone.
+	rows, err := l.db.QueryContext(ctx,
+		`SELECT id, project_name, pid FROM ticks WHERE status='running' AND pid > 0`)
+	if err != nil {
+		log.Printf("DANGLING: startup cleanup query failed: %v", err)
+		return
+	}
+
+	type deadTick struct {
+		id      string
+		project string
+		pid     int
+	}
+	var dead []deadTick
+	for rows.Next() {
+		var id, project string
+		var pid int
+		if err := rows.Scan(&id, &project, &pid); err != nil {
+			continue
+		}
+		if _, err := os.Stat(fmt.Sprintf("/proc/%d/stat", pid)); os.IsNotExist(err) {
+			dead = append(dead, deadTick{id: id, project: project, pid: pid})
+		}
+	}
+	rows.Close()
+
+	if len(dead) == 0 {
+		log.Printf("DANGLING: startup cleanup — no dead-pid ticks found (gateway ticks with pid=0 left running)")
+		return
+	}
+
+	// Bump last_tick_completed ONLY for projects whose ticks were actually
+	// reaped, so the packer uses actual last-tick time for urgency. Projects
+	// with live pid=0 running ticks are untouched.
+	projects := make(map[string]struct{}, len(dead))
+	for _, dt := range dead {
+		projects[dt.project] = struct{}{}
+	}
+	names := make([]string, 0, len(projects))
+	for name := range projects {
+		names = append(names, name)
+	}
+	placeholders := make([]string, len(names))
+	args := make([]any, len(names))
+	for i, name := range names {
+		placeholders[i] = "?"
+		args[i] = name
+	}
 	if _, err := l.db.ExecContext(ctx,
 		`UPDATE projects SET last_tick_completed = strftime('%Y-%m-%dT%H:%M:%S', 'now')
- 	 WHERE name IN (SELECT DISTINCT project_name FROM ticks WHERE status='running')`); err != nil {
+		 WHERE name IN (`+strings.Join(placeholders, ",")+`)`, args...); err != nil {
 		log.Printf("DANGLING: last_tick_completed update failed: %v", err)
 	}
 
-	result, err := l.db.ExecContext(ctx,
-		`UPDATE ticks SET status='timeout' WHERE status='running'`)
-	if err != nil {
-		log.Printf("DANGLING: startup cleanup failed: %v", err)
-		return
+	var cleaned int
+	for _, dt := range dead {
+		// outcome stays unset — the CHECK constraint only allows
+		// ('committed','dry_run','failed','timeout'); 'zombie_reaped' from
+		// reapZombies predates that constraint and violates it here.
+		if _, err := l.db.ExecContext(ctx,
+			`UPDATE ticks SET status='timeout' WHERE id=?`, dt.id); err != nil {
+			log.Printf("DANGLING: reaping tick %s (pid=%d): %v", dt.id, dt.pid, err)
+			continue
+		}
+		cleaned++
 	}
-	n, _ := result.RowsAffected()
-	if n > 0 {
-		log.Printf("DANGLING: cleaned %d running ticks from previous process", n)
+	if cleaned > 0 {
+		log.Printf("DANGLING: cleaned %d dead-pid running tick(s) from previous process", cleaned)
 	}
 }
 
