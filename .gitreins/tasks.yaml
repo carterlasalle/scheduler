@@ -503,3 +503,23 @@ tasks:
   status: complete
   created_at: '2026-08-02T02:24:02.886223+00:00'
   completed_at: '2026-08-02T02:24:06.073482+00:00'
+- id: REC-ZOMBIE-OUTCOME
+  title: Fix reapZombies CHECK-constraint violation so zombie ticks actually get reaped
+  criteria:
+  - "reapZombies UPDATE no longer writes outcome='zombie_reaped' \u2014 must use an\
+    \ outcome value allowed by the ticks CHECK constraint (or leave outcome unset),\
+    \ so SQLite no longer rejects the reap"
+  - dead-pid running ticks (pid>0, /proc/<pid> gone) are actually transitioned to
+    status='timeout' by reapZombies
+  - 'regression tests exist and pass: dead-pid tick reaped (status timeout, outcome
+    NULL), live pid (os.Getpid) untouched, pid=0 gateway tick untouched'
+  - "reapZombies must not issue the UPDATE while the SELECT rows are still open (database/sql\
+    \ pool deadlock on SQLite single connection) \u2014 collect IDs, close rows, then\
+    \ update"
+  - 'full suite passes: go build ./..., go vet ./..., gofmt clean, go test -short
+    -p 1 ./... (9/9 packages), golangci-lint 0 issues'
+  - commit path-limited to internal/scheduler/tick_process.go + internal/scheduler/tick_process_infra012_test.go
+    with Co-authored-by trailer
+  status: complete
+  created_at: '2026-08-02T05:05:27.462023+00:00'
+  completed_at: '2026-08-02T05:06:35.094658+00:00'
