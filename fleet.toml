@@ -83,3 +83,20 @@ provider = "deepseek-foreman"
 namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:64245"
 enabled = true
+
+# ring-runner — active build (Sonic-style platformer, config-driven levels).
+# 2026-08-02: bumped weight 10→15, priority 5→10 — was registered but NEVER
+# ticked for 18h (p5 starvation behind 9 projects 36-40h starved; p10 fleet
+# monopolizes the 6 slots). Pin the active tier so restarts keep it running.
+[[projects]]
+name = "ring-runner"
+repo_url = "local:/home/kara/ring-runner"
+workdir = "/home/kara/ring-runner"
+weight = 15
+priority = 10
+cooldown_s = 900
+model = "deepseek-v4-flash"
+provider = "deepseek-foreman"
+namespace_id = "coding-hermes"
+deliver = "telegram:-1003310984808:109397"
+enabled = true
