@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"os"
 	"testing"
 	"time"
 
@@ -201,5 +202,67 @@ func TestCleanDanglingOnStartup_NoDuplicateRespawn(t *testing.T) {
 	}
 	if !picked["p3"] {
 		t.Errorf("eligible project p3 was not picked")
+	}
+}
+
+// tickOutcomeOf returns the raw outcome column for a tick (NULL when unset).
+func tickOutcomeOf(t *testing.T, db *sql.DB, tickID string) sql.NullString {
+	t.Helper()
+	var outcome sql.NullString
+	if err := db.QueryRow(`SELECT outcome FROM ticks WHERE id = ?`, tickID).Scan(&outcome); err != nil {
+		t.Fatalf("query tick outcome %s: %v", tickID, err)
+	}
+	return outcome
+}
+
+// TestReapZombies_DeadPidReaped — a running tick whose pid no longer exists
+// in /proc must be reaped by the 60s zombie reaper: status='timeout' and
+// outcome left NULL. Regression for REC-ZOMBIE-OUTCOME: the old code set
+// outcome='zombie_reaped', which violates the ticks outcome CHECK constraint
+// ('committed','dry_run','failed','timeout'), so SQLite rejected the UPDATE
+// and the tick stayed 'running' forever — reaping silently never worked.
+func TestReapZombies_DeadPidReaped(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProjectINFRA012(t, db, "zombie-proj")
+	insertRunningTick(t, db, "zombie-tick-1", "zombie-proj", deadTestPID)
+
+	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	loop.reapZombies()
+
+	if got := tickStatusOf(t, db, "zombie-tick-1"); got != "timeout" {
+		t.Errorf("dead-pid tick status = %q, want timeout (old code: UPDATE rejected by outcome CHECK, stays running)", got)
+	}
+	if outcome := tickOutcomeOf(t, db, "zombie-tick-1"); outcome.Valid {
+		t.Errorf("dead-pid tick outcome = %q, want NULL (CHECK constraint rejects 'zombie_reaped')", outcome.String)
+	}
+}
+
+// TestReapZombies_LivePidUntouched — a running tick whose pid is alive (the
+// test process itself) must NOT be reaped by the zombie reaper.
+func TestReapZombies_LivePidUntouched(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProjectINFRA012(t, db, "live-proj")
+	insertRunningTick(t, db, "live-tick-1", "live-proj", os.Getpid())
+
+	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	loop.reapZombies()
+
+	if got := tickStatusOf(t, db, "live-tick-1"); got != "running" {
+		t.Errorf("live-pid tick status = %q, want running (pid %d is the test process — alive)", got, os.Getpid())
+	}
+}
+
+// TestReapZombies_PidZeroUntouched — a gateway-spawned tick (pid=0) must NOT
+// be reaped by the zombie reaper; reapZombies only targets pid > 0.
+func TestReapZombies_PidZeroUntouched(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProjectINFRA012(t, db, "gw-proj")
+	insertRunningTick(t, db, "gw-tick-1", "gw-proj", 0)
+
+	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	loop.reapZombies()
+
+	if got := tickStatusOf(t, db, "gw-tick-1"); got != "running" {
+		t.Errorf("pid=0 gateway tick status = %q, want running (reaper only targets pid > 0)", got)
 	}
 }

@@ -244,8 +244,11 @@ func (l *Loop) cleanDanglingOnStartup() {
 	var cleaned int
 	for _, dt := range dead {
 		// outcome stays unset — the CHECK constraint only allows
-		// ('committed','dry_run','failed','timeout'); 'zombie_reaped' from
-		// reapZombies predates that constraint and violates it here.
+		// ('committed','dry_run','failed','timeout'); 'zombie_reaped'
+		// violates it. BOTH cleanup paths (cleanDanglingOnStartup and
+		// reapZombies) must be outcome-free for the same reason — an
+		// UPDATE that sets outcome='zombie_reaped' is rejected by SQLite
+		// and the tick silently stays 'running' forever.
 		if _, err := l.db.ExecContext(ctx,
 			`UPDATE ticks SET status='timeout' WHERE id=?`, dt.id); err != nil {
 			log.Printf("DANGLING: reaping tick %s (pid=%d): %v", dt.id, dt.pid, err)
@@ -266,9 +269,11 @@ func (l *Loop) reapZombies() {
 		log.Printf("ZOMBIE: reaper query failed: %v", err)
 		return
 	}
-	defer rows.Close()
 
-	var reaped int
+	// Collect dead tick IDs first and close rows BEFORE issuing UPDATEs —
+	// SQLite allows a single writer, and an UPDATE issued while this SELECT
+	// still holds the pool's only connection blocks forever (pool deadlock).
+	var dead []string
 	for rows.Next() {
 		var id string
 		var pid int
@@ -276,13 +281,22 @@ func (l *Loop) reapZombies() {
 			continue
 		}
 		if _, err := os.Stat(fmt.Sprintf("/proc/%d/stat", pid)); os.IsNotExist(err) {
-			if _, err := l.db.ExecContext(ctx,
-				`UPDATE ticks SET status='timeout', outcome='zombie_reaped' WHERE id=?`, id); err != nil {
-				log.Printf("ZOMBIE: reaping tick %s: %v", id, err)
-				continue
-			}
-			reaped++
+			dead = append(dead, id)
 		}
+	}
+	rows.Close()
+
+	var reaped int
+	for _, id := range dead {
+		// outcome stays unset — see the CHECK-constraint comment in
+		// cleanDanglingOnStartup above; setting outcome here makes
+		// SQLite reject the UPDATE and the zombie is never reaped.
+		if _, err := l.db.ExecContext(ctx,
+			`UPDATE ticks SET status='timeout' WHERE id=?`, id); err != nil {
+			log.Printf("ZOMBIE: reaping tick %s: %v", id, err)
+			continue
+		}
+		reaped++
 	}
 	if reaped > 0 {
 		log.Printf("ZOMBIE: reaped %d ticks (process died)", reaped)
