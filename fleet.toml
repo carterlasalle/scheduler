@@ -66,3 +66,20 @@ provider = "deepseek-foreman"
 namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:4297"
 enabled = true
+
+# musterflow — feature-complete, 0 pending actionable (NEVER-DONE standing audit
+# + E2E-001 periodic only; DOCKER-GHCR-001 blocked-human). Bane 07-31 policy:
+# 0 pending -> 7200 (NOT 43200). Pin cooldown_s=7200 so daemon restarts +
+# fleet-auto-heal rule 3 both respect it. Tick 39 (2026-08-01).
+[[projects]]
+name = "musterflow"
+repo_url = "https://github.com/totalwindupflightsystems/musterflow"
+workdir = "/home/kara/musterflow"
+weight = 15
+priority = 10
+cooldown_s = 7200
+model = "deepseek-v4-flash"
+provider = "deepseek-foreman"
+namespace_id = "coding-hermes"
+deliver = "telegram:-1003310984808:64245"
+enabled = true
