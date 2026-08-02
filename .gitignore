@@ -23,7 +23,17 @@ deploy/*.log
 
 # Project-local state (not committed)
 .vfs/
-.coding-hermes/
+.coding-hermes/*
 !.coding-hermes/tasks.md
+!.coding-hermes/tasks.md.bak
+!.coding-hermes/board/
+!.coding-hermes/board/schema.sql
+!.coding-hermes/board/*.jsonl
+.coding-hermes/board/*.db
+!.coding-hermes/research/
+!.coding-hermes/research/brin-index-design.md
+!.coding-hermes/tests/
+!.coding-hermes/tests/_index.md
+!.coding-hermes/tests/test-state.toml
 .gitreins/history/
 dagger.db
