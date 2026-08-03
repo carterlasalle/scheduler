@@ -298,6 +298,10 @@ func main() {
 		id := r.PathValue("id")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := dashGen.GenerateNamespaceView(w, id); err != nil {
+			if errors.Is(err, database.ErrNamespaceNotFound) {
+				http.Error(w, "namespace not found: "+id, http.StatusNotFound)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
