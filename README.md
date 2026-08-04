@@ -92,7 +92,7 @@ curl http://127.0.0.1:9090/api/v1/health
 # → {"status":"ok","uptime":"5m","active_ticks":3}
 
 # Fleet status
-curl http://127.0.0.1:9090/api/v1/status | jq '.project_count'
+curl http://127.0.0.1:9090/api/v1/status | jq '.active_projects'
 
 # Open the dashboard
 open http://127.0.0.1:9090/
@@ -339,6 +339,14 @@ Skills are maintained in `~/.hermes/skills/coding-hermes-*/` and loaded by the s
 ## REST API
 
 Full REST API at `http://127.0.0.1:9090/api/v1/`.
+
+**API wire format:** responses are snake_case per [specs/S06-rest-api.md](specs/S06-rest-api.md)
+(e.g. `active_projects`, `repo_url`, `cooldown_s`, `created_at`). Request
+bodies accept snake_case AND the legacy PascalCase Go field names
+(`Name`, `RepoURL`, `CooldownS`, `Enabled`, …) so pre-conformance fleet
+automation keeps working. On create, omitted `weight`/`priority`/
+`cooldown_s`/`decay_rate` default to `10`/`5`/`900`/`1.0`; new projects are
+created disabled — resume them explicitly.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|

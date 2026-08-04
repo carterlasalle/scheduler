@@ -2,6 +2,24 @@
 
 All notable changes to the Coding Hermes Scheduler.
 
+## [Unreleased] — 2026-08-04
+
+### API Conformance (DOGFOOD-001/003/004)
+
+- **snake_case wire format** — `Project`, `Tick`, `Event`, `ProjectUpdates` now carry S02/S06 `json` tags; responses emit `name`, `repo_url`, `cooldown_s`, `active_projects`, etc. per the OpenAPI contract
+- **Backward-compatible request decoding** — custom `UnmarshalJSON` on `Project` and `ProjectUpdates` accepts snake_case AND legacy PascalCase keys (`Name`, `CooldownS`, `Enabled`, …); live fleet automation (fleet-auto-heal, stand-in gap-pusher) is unaffected
+- **Create defaults** — `POST /api/v1/projects` fills `weight=10`, `priority=5`, `cooldown_s=900`, `decay_rate=1.0` when omitted; the documented minimal body `{name, repo_url, workdir}` now works; new projects stay disabled
+- **Error mapping** — SQLite CHECK-constraint violations return `400` with an actionable range message (previously `500`); duplicate name/workdir still return `409`
+- **Conformance tests** — `internal/api/conformance_test.go`: 11 tests covering both request spellings, 400/409 mapping, and exact response field names for `/projects`, `/status`, `/ticks`, `/events`
+- **Spec S06 approved** — §1.1 conformance section rewritten to match verified behavior; status flipped Draft → Approved
+- **README** — fixed `jq '.project_count'` → `jq '.active_projects'`; added "API wire format" note
+
+### Verification Harness (DOGFOOD-002)
+
+- **Fixed `--test-verify` red streak (50+ runs since 2026-07-31)** — fixture projects now get unique workdirs (`tmpDir/<name>`, created via `os.MkdirAll`) so the case-insensitive dup-workdir guard no longer rejects "beta"
+- **Priority-ordering check fixed** — the per-eval spawn-order assertion was unsatisfiable: slot-pool goroutines start concurrently, so sub-second `spawned_at` order is scheduler-shuffled, not pack order. The check now asserts first-cycle set membership against the expected greedy-knapsack pack (urgency/priority ordering is still enforced)
+- **CI gate** — `.github/workflows/ci.yml` build job now runs `./bin/schedulerd --test-verify 3` after "Build binaries" so the end-to-end verify can't silently rot again
+
 ## [1.0.0] — 2026-07-18
 
 ### Core Scheduler
