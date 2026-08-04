@@ -1,6 +1,6 @@
 # S06 — REST API Specification
 
-**Status:** Draft  
+**Status:** Approved  
 **Depends on:** S01, S02, S03, S04, S05  
 **Pages target:** 4-5
 
@@ -16,9 +16,34 @@ The implementation registers fifteen `ServeMux` patterns representing twenty met
 
 ### 1.1 Current implementation conformance
 
-The contract uses the S02 lower snake-case JSON field names. `internal/database/models.go` and `ProjectUpdates` currently omit explicit `json` tags, so Go's encoder emits exported field names such as `Name`, `RepoURL`, and `ProjectName`, while underscore-separated request keys do not bind exactly. The implementation must restore the S02 tags before its wire representation fully conforms to the OpenAPI contract; this specification does not redefine the database model.
+**Verified conformant (2026-08-04, DOGFOOD-001/002/003/004).** The
+implementation now matches this contract on the full verified surface:
 
-Likewise, the current `handleProjectByID` calls `splitPath` on the full URL and selects `parts[0]`; for `/api/v1/projects/alpha`, that value is `api`, not `alpha`. Section 4 records the required relative-path dispatch and identifies this as an implementation defect rather than documenting the defect as the API contract.
+- **JSON tags — FIXED.** `internal/database/models.go` (`Project`, `Tick`,
+  `Event`) and `ProjectUpdates` carry the S02 lower snake-case `json` tags,
+  so responses emit `name`, `repo_url`, `cooldown_s`, `project_name`,
+  `created_at`, etc. per the OpenAPI schema. Request decoding is
+  backward-compatible: custom `UnmarshalJSON` on `Project` and
+  `ProjectUpdates` accepts the snake_case keys AND the legacy PascalCase Go
+  field names (`Name`, `CooldownS`, `Enabled`, …) so pre-conformance fleet
+  automation (fleet-auto-heal, stand-in gap-pusher scripts) keeps working.
+- **Route dispatch — FIXED.** `handleProjectByID` strips the
+  `/api/v1/projects/` prefix before `splitPath`, so `parts[0]` is the
+  project name (`alpha`), not `api`. GET/PUT `/api/v1/projects/{name}` and
+  the `/pause`, `/resume`, `/spawn` sub-routes dispatch correctly.
+- **Create defaults — FIXED.** `POST /projects` fills `weight=10`,
+  `priority=5`, `cooldown_s=900`, `decay_rate=1.0` when the body leaves them
+  zero-valued, so the documented minimal body `{name, repo_url, workdir}`
+  satisfies the CHECK constraints. New projects are created disabled.
+- **Error mapping — FIXED.** SQLite CHECK-constraint violations map to
+  `400` with an actionable range message; UNIQUE violations map to `409`
+  "project already exists"; the case-insensitive dup-workdir guard maps to
+  `409` with the guard's message.
+
+Verified by `internal/api/conformance_test.go` (snake_case + PascalCase
+create/update, 409 duplicate name/workdir, 400 invalid weight, and exact
+response field-name assertions for `/projects`, `/status`, `/ticks`,
+`/events`) and `./bin/schedulerd --test-verify 3` in CI.
 
 ---
 
