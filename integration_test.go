@@ -187,8 +187,8 @@ func testAPIProjects(t *testing.T, base string) {
 	json.NewDecoder(resp.Body).Decode(&result)
 	project := result["project"].(map[string]interface{})
 
-	if project["Name"] != "integration-test" {
-		t.Errorf("expected Name integration-test, got %v", project["Name"])
+	if project["name"] != "integration-test" {
+		t.Errorf("expected name integration-test, got %v", project["name"])
 	}
 
 	// List projects.
@@ -347,11 +347,11 @@ func testDynamicConfig(t *testing.T, base string) {
 	json.NewDecoder(resp.Body).Decode(&result)
 	project := result["project"].(map[string]interface{})
 
-	if int(project["Weight"].(float64)) != 50 {
-		t.Errorf("expected Weight 50, got %v", project["Weight"])
+	if int(project["weight"].(float64)) != 50 {
+		t.Errorf("expected weight 50, got %v", project["weight"])
 	}
-	if int(project["Priority"].(float64)) != 8 {
-		t.Errorf("expected Priority 8, got %v", project["Priority"])
+	if int(project["priority"].(float64)) != 8 {
+		t.Errorf("expected priority 8, got %v", project["priority"])
 	}
 
 	// Pause and resume.
@@ -513,8 +513,8 @@ func testNamespaceProjectAssignment(t *testing.T, base string) {
 		t.Fatalf("expected 1 project in namespace, got %d", len(projects))
 	}
 	p := projects[0].(map[string]interface{})
-	if nsID, ok := p["NamespaceID"].(string); !ok || nsID != "team-a" {
-		t.Errorf("project NamespaceID = %v, want team-a", p["NamespaceID"])
+	if nsID, ok := p["namespace_id"].(string); !ok || nsID != "team-a" {
+		t.Errorf("project namespace_id = %v, want team-a", p["namespace_id"])
 	}
 }
 
