@@ -523,3 +523,27 @@ tasks:
   status: complete
   created_at: '2026-08-02T05:05:27.462023+00:00'
   completed_at: '2026-08-02T05:06:35.094658+00:00'
+- id: dogfood-api-conformance
+  title: 'DOGFOOD-001/002/003/004: API wire conformance + create defaults + verify
+    harness fix'
+  criteria:
+  - POST /api/v1/projects with snake_case {name,repo_url,workdir} returns 201 with
+    defaults (weight 10, priority 5, cooldown_s 900, decay_rate 1.0)
+  - Legacy PascalCase create body {Name,RepoURL,Workdir,Weight:10} still returns 201
+    (backward compat)
+  - Duplicate project name returns 409; duplicate workdir returns 409; invalid weight
+    returns 400 not 500
+  - All API responses emit snake_case json field names (Project/Tick/Event/ProjectUpdates
+    have json tags); conformance test asserts exact field names per endpoint
+  - PUT accepts both snake_case and legacy PascalCase keys (CooldownS/Enabled/DecayRate
+    still work)
+  - 'README jq example fixed: .project_count -> .active_projects; wire format documented'
+  - cmd/schedulerd/test_verify.go uses unique per-project workdirs; ./bin/schedulerd
+    --test-verify 3 passes with SCHEDULER VERIFIED
+  - ci.yml runs ./bin/schedulerd --test-verify 3 in the build job
+  - "specs/S06-rest-api.md \xA71.1 re-verified: splitPath marked fixed, json-tags\
+    \ gap closed, Status flipped to Approved"
+  - 'go build, go vet, gofmt clean, go test -count=1 -short -p 1 ./... all pass; commit
+    has Co-authored-by: Alexis Okuwa trailer'
+  status: pending
+  created_at: '2026-08-04T12:19:39.706031+00:00'
