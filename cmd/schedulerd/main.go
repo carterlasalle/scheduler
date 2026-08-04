@@ -70,6 +70,17 @@ func main() {
 		*namespaceMode = true
 	}
 
+	// ── Test-verify mode: run correctness checks and exit ──
+	// Runs BEFORE the main database is opened: testVerify creates its own
+	// temp DB, so requiring the production DB path here would break CI and
+	// any host without ~/.hermes/coding-hermes/ (DOGFOOD-002 follow-up).
+	if *testVerifyFlag > 0 {
+		if err := testVerify(*testVerifyFlag); err != nil {
+			log.Fatalf("VERIFY FAILED: %v", err)
+		}
+		return
+	}
+
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	// Persist all logs to a file as well as stdout (system-plan-v2 §1.1).
@@ -108,15 +119,7 @@ func main() {
 			len(cfg.Projects), len(cfg.Namespaces), *configFile)
 	}
 
-	// ── Test-verify mode: run correctness checks and exit ──
-	if *testVerifyFlag > 0 {
-		if err := testVerify(*testVerifyFlag); err != nil {
-			log.Fatalf("VERIFY FAILED: %v", err)
-		}
-		return
-	}
-
-	// Create the evaluation loop.
+	// ── Create the evaluation loop.
 	loop := scheduler.NewLoop(db, *minInterval, *maxInterval, *numLevels, *weightBudget, *maxConcurrent, *namespaceMode)
 	// Apply the tick timeout to the real spawner so Wait()/scanner cleanup use it.
 	loop.SetTickTimeout(*tickTimeout)
