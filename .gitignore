@@ -37,3 +37,4 @@ deploy/*.log
 !.coding-hermes/tests/test-state.toml
 .gitreins/history/
 dagger.db
+/schedulerd
