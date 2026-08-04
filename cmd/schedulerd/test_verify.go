@@ -51,10 +51,18 @@ func testVerify(cycles int) error {
 	maxConcur := 6
 
 	for _, p := range projects {
+		// Each fixture project gets its own workdir — the case-insensitive
+		// dup-workdir guard in CreateProject rejects enabled projects that
+		// share a directory (DOGFOOD-002: sharing tmpDir left the harness
+		// red for 50+ runs). The dirs must exist because spawns cd into them.
+		workdir := tmpDir + "/" + p.Name
+		if err := os.MkdirAll(workdir, 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", p.Name, err)
+		}
 		proj := &database.Project{
 			Name:      p.Name,
 			RepoURL:   "local:/test",
-			Workdir:   tmpDir,
+			Workdir:   workdir,
 			Weight:    p.Weight,
 			Priority:  p.Priority,
 			CooldownS: p.CooldownS,
@@ -164,26 +172,75 @@ func testVerify(cycles int) error {
 	db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE (session_id IS NULL OR session_id = '') AND status != 'running'`).Scan(&noSid)
 	check("Session IDs captured", noSid == 0, fmt.Sprintf("%d ticks without session ID", noSid))
 
-	// 6. Priority ordering within budget (high priority ≤ low priority in spawn order).
-	prioOK := true
-	sort.Slice(projects, func(i, j int) bool { return projects[i].Priority > projects[j].Priority })
-	for _, eg := range evals {
-		lastPrio := 999
-		for _, t := range eg.ticks {
-			p := 0
-			for _, proj := range projects {
-				if proj.Name == t.proj {
-					p = proj.Priority
-					break
-				}
+	// 6. Priority ordering: the packer selects projects urgency-desc/
+	// priority-desc, so the FIRST evaluation cycle of a fresh fleet must
+	// contain the highest-priority projects that fit the budget. Per-cycle
+	// spawn order cannot be checked via spawned_at because slot-pool
+	// goroutines start concurrently (goroutine scheduling shuffles
+	// sub-second spawn order — DOGFOOD-002 follow-up, 2026-08-04), so the
+	// check compares set membership of the first cycle against the top
+	// priorities by pack order.
+	type weightPrio struct {
+		name     string
+		weight   int
+		priority int
+		urgency  float64
+	}
+	cands := make([]weightPrio, len(projects))
+	for i, p := range projects {
+		// urgency == priority when a project has never ticked (fresh fleet).
+		cands[i] = weightPrio{p.Name, p.Weight, p.Priority, float64(p.Priority)}
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].urgency != cands[j].urgency {
+			return cands[i].urgency > cands[j].urgency
+		}
+		return cands[i].priority > cands[j].priority
+	})
+	// Greedy knapsack fill, same as the packer.
+	wantFirst := map[string]bool{}
+	usedW := 0
+	for _, c := range cands {
+		if len(wantFirst) >= maxConcur || usedW+c.weight > budget {
+			continue
+		}
+		wantFirst[c.name] = true
+		usedW += c.weight
+	}
+	// Find the earliest spawn second (first cycle) and its membership.
+	firstCycle := ""
+	if err := db.QueryRowContext(ctx, `
+		SELECT MIN(substr(spawned_at, 1, 19)) FROM ticks
+		WHERE status IN ('completed','failed','timeout') AND spawned_at != ''`).Scan(&firstCycle); err != nil {
+		firstCycle = ""
+	}
+	gotFirst := map[string]bool{}
+	if firstCycle != "" {
+		fcRows, _ := db.QueryContext(ctx, `
+			SELECT DISTINCT project_name FROM ticks
+			WHERE substr(spawned_at, 1, 19) = ?`, firstCycle)
+		if fcRows != nil {
+			defer fcRows.Close()
+			for fcRows.Next() {
+				var n string
+				fcRows.Scan(&n)
+				gotFirst[n] = true
 			}
-			if p > lastPrio {
-				prioOK = false
-			}
-			lastPrio = p
 		}
 	}
-	check("Priority descending within evals", prioOK, "higher priority projects spawned first")
+	prioOK := true
+	for n := range wantFirst {
+		if !gotFirst[n] {
+			prioOK = false
+		}
+	}
+	for n := range gotFirst {
+		if !wantFirst[n] {
+			prioOK = false
+		}
+	}
+	check("First cycle = highest-priority pack", prioOK,
+		fmt.Sprintf("first cycle %s: %d/%d expected projects spawned", firstCycle, len(gotFirst), len(wantFirst)))
 
 	fmt.Printf("\n---\n%d checks, %d failures\n", checks, failures)
 	if failures > 0 {

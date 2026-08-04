@@ -46,6 +46,21 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "name, repo_url, workdir are required")
 		return
 	}
+	// Fill S06 defaults for zero-valued fields so a minimal {name, repo_url,
+	// workdir} body satisfies the CHECK constraints. Enabled intentionally
+	// stays false — creating a project must not auto-enable it.
+	if p.Weight == 0 {
+		p.Weight = 10
+	}
+	if p.Priority == 0 {
+		p.Priority = 5
+	}
+	if p.CooldownS == 0 {
+		p.CooldownS = 900
+	}
+	if p.DecayRate == 0 {
+		p.DecayRate = 1.0
+	}
 	if err := database.CreateProject(context.Background(), s.db, &p); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint") {
 			writeError(w, 409, "project already exists")
@@ -55,11 +70,26 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 409, err.Error())
 			return
 		}
+		if isCheckConstraint(err) {
+			writeError(w, 400, projectConstraintMessage)
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}
 	writeJSON(w, 201, p)
 }
+
+// isCheckConstraint reports whether err is a SQLite CHECK-constraint
+// violation — i.e. a client-correctable value-range problem, not a server
+// fault. Handlers map it to 400 with an actionable message.
+func isCheckConstraint(err error) bool {
+	return strings.Contains(err.Error(), "CHECK constraint failed")
+}
+
+// projectConstraintMessage is the actionable 400 body for projects-table
+// CHECK violations (weight/priority/decay_rate ranges).
+const projectConstraintMessage = "invalid project fields: weight must be 1..100; priority 1..10; decay_rate > 0"
 
 // handleProjectByID handles GET, PUT, POST on /projects/:name and sub-routes.
 func (s *Server) handleProjectByID(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +168,10 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 	if err := database.UpdateProject(context.Background(), s.db, name, updates); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, 404, "project not found")
+			return
+		}
+		if isCheckConstraint(err) {
+			writeError(w, 400, projectConstraintMessage)
 			return
 		}
 		writeError(w, 500, err.Error())

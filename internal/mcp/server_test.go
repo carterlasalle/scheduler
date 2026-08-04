@@ -289,7 +289,8 @@ func TestMCP_FleetProjectDetail(t *testing.T) {
 		t.Fatalf("error: %+v", resp.Error)
 	}
 	text := extractText(t, resp.Result)
-	if !strings.Contains(text, `"Name":"alpha"`) {
+	// Wire format is snake_case per S06 (DOGFOOD-001/003 conformance).
+	if !strings.Contains(text, `"name":"alpha"`) {
 		t.Errorf("project name missing: %s", text)
 	}
 }
