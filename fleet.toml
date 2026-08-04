@@ -101,3 +101,21 @@ provider = "deepseek-foreman"
 namespace_id = "coding-hermes"
 deliver = "telegram:-1003310984808:109397"
 enabled = true
+
+# h3 — umbrella coordination repo (get-h3). 2026-08-04 (H3-GAP-003): idle
+# ticks flood the board (50+/24h, tasks.md 7,888 lines/580KB). Pin cooldown
+# 600s -> 21600s (6h) in BOTH fleet.toml files so daemon restarts and
+# fleet-auto-heal rule 3 both respect it. autoSlowdown productive-reset only
+# fires below 3600s, so this pin is durable against the 600s reset.
+[[projects]]
+name = "h3"
+repo_url = "https://github.com/get-h3/h3"
+workdir = "/home/kara/get-h3/h3"
+weight = 15
+priority = 10
+cooldown_s = 21600
+model = "deepseek-v4-flash"
+provider = "deepseek-foreman"
+namespace_id = "coding-hermes"
+deliver = "telegram:-1003310984808:84802"
+enabled = true
