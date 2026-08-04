@@ -1,0 +1,304 @@
+package api_test
+
+// Wire-format conformance tests for DOGFOOD-001/003 (dogfood audit
+// 2026-08-04): POST /api/v1/projects must accept the documented S06
+// snake_case body AND the legacy PascalCase spelling used by live fleet
+// automation; responses must serialize snake_case per specs/S06-rest-api.md.
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/coding-herms/scheduler/internal/database"
+)
+
+// TestConformance_CreateProject_SnakeCaseDefaults verifies the documented
+// S06 minimal body {name, repo_url, workdir} creates a project with defaults
+// filled (weight 10, priority 5, cooldown_s 900, decay_rate 1.0) and the
+// project is NOT auto-enabled.
+func TestConformance_CreateProject_SnakeCaseDefaults(t *testing.T) {
+	a := newAPITestServer(t)
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "snakecase",
+		"repo_url": "https://example.com/snakecase",
+		"workdir":  "/tmp/snakecase",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %v", status, resp)
+	}
+
+	got, err := database.GetProject(context.Background(), a.db, "snakecase")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.Weight != 10 {
+		t.Errorf("weight = %d, want default 10", got.Weight)
+	}
+	if got.Priority != 5 {
+		t.Errorf("priority = %d, want default 5", got.Priority)
+	}
+	if got.CooldownS != 900 {
+		t.Errorf("cooldown_s = %d, want default 900", got.CooldownS)
+	}
+	if got.DecayRate != 1.0 {
+		t.Errorf("decay_rate = %v, want default 1.0", got.DecayRate)
+	}
+	if got.Enabled {
+		t.Error("enabled = true, want false — create must not auto-enable")
+	}
+}
+
+// TestConformance_CreateProject_LegacyPascalCase verifies backward
+// compatibility: fleet automation still sends PascalCase keys, and those
+// must keep binding after the snake_case json tags landed.
+func TestConformance_CreateProject_LegacyPascalCase(t *testing.T) {
+	a := newAPITestServer(t)
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"Name":     "legacy",
+		"RepoURL":  "https://example.com/legacy",
+		"Workdir":  "/tmp/legacy",
+		"Weight":   10,
+		"Priority": 7,
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %v", status, resp)
+	}
+	got, err := database.GetProject(context.Background(), a.db, "legacy")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.Weight != 10 {
+		t.Errorf("weight = %d, want 10 (explicit PascalCase value)", got.Weight)
+	}
+	if got.Priority != 7 {
+		t.Errorf("priority = %d, want 7 (explicit PascalCase value)", got.Priority)
+	}
+}
+
+// TestConformance_CreateProject_DuplicateName verifies a duplicate name maps
+// to 409 — previously the CHECK constraint on weight fired first and the 409
+// was unreachable from the documented body shape.
+func TestConformance_CreateProject_DuplicateName(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "alpha",
+		"repo_url": "https://example.com/alpha2",
+		"workdir":  "/tmp/alpha2",
+	})
+	if status != http.StatusConflict {
+		t.Errorf("status = %d, want 409: %v", status, resp)
+	}
+}
+
+// TestConformance_CreateProject_DuplicateWorkdir verifies the
+// case-insensitive dup-workdir guard surfaces as 409 with the guard's
+// message.
+func TestConformance_CreateProject_DuplicateWorkdir(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha") // enabled, workdir /tmp/alpha
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "beta",
+		"repo_url": "https://example.com/beta",
+		"workdir":  "/TMP/ALPHA", // case-insensitive duplicate of /tmp/alpha
+	})
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "already registered by enabled project") {
+		t.Errorf("error = %q, want the dup-workdir guard message", msg)
+	}
+}
+
+// TestConformance_CreateProject_InvalidWeight verifies out-of-range weight
+// maps to 400 with an actionable message, not 500.
+func TestConformance_CreateProject_InvalidWeight(t *testing.T) {
+	a := newAPITestServer(t)
+	for _, weight := range []int{101, -5} {
+		status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+			"name":     "badweight",
+			"repo_url": "https://example.com/badweight",
+			"workdir":  "/tmp/badweight",
+			"weight":   weight,
+		})
+		if status != http.StatusBadRequest {
+			t.Errorf("weight=%d: status = %d, want 400: %v", weight, status, resp)
+		}
+		msg, _ := resp["error"].(string)
+		if !strings.Contains(msg, "weight must be 1..100") {
+			t.Errorf("weight=%d: error = %q, want actionable range message", weight, msg)
+		}
+	}
+}
+
+// TestConformance_UpdateProject_LegacyPascalCase verifies the live
+// fleet-automation PUT shape (CooldownS, Enabled, DecayRate) still binds.
+func TestConformance_UpdateProject_LegacyPascalCase(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+
+	status, resp := a.do(t, "PUT", "/api/v1/projects/alpha", map[string]interface{}{
+		"CooldownS": 300,
+		"Enabled":   false,
+		"DecayRate": 0.5,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %v", status, resp)
+	}
+	got, err := database.GetProject(context.Background(), a.db, "alpha")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.CooldownS != 300 {
+		t.Errorf("cooldown_s = %d, want 300", got.CooldownS)
+	}
+	if got.Enabled {
+		t.Error("enabled = true, want false after legacy Enabled:false PUT")
+	}
+	if got.DecayRate != 0.5 {
+		t.Errorf("decay_rate = %v, want 0.5", got.DecayRate)
+	}
+}
+
+// TestConformance_UpdateProject_InvalidWeight verifies out-of-range weight
+// on update maps to 400, not 500.
+func TestConformance_UpdateProject_InvalidWeight(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+	status, resp := a.do(t, "PUT", "/api/v1/projects/alpha", map[string]interface{}{
+		"weight": 0,
+	})
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400: %v", status, resp)
+	}
+}
+
+// TestConformance_WireFormat_Projects asserts the exact JSON field names on
+// GET /api/v1/projects: snake_case per S06 (cooldown_s, repo_url, enabled),
+// never PascalCase (CooldownS, RepoURL, Enabled).
+func TestConformance_WireFormat_Projects(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+
+	status, body := a.do(t, "GET", "/api/v1/projects", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	projs := body["projects"].([]interface{})
+	if len(projs) != 1 {
+		t.Fatalf("got %d projects, want 1", len(projs))
+	}
+	p := projs[0].(map[string]interface{})
+	for _, key := range []string{"name", "repo_url", "workdir", "weight", "priority", "cooldown_s", "decay_rate", "enabled", "created_at", "updated_at"} {
+		if _, ok := p[key]; !ok {
+			t.Errorf("projects[0] missing snake_case key %q: %v", key, p)
+		}
+	}
+	for _, key := range []string{"Name", "RepoURL", "Workdir", "CooldownS", "Enabled", "CreatedAt"} {
+		if _, ok := p[key]; ok {
+			t.Errorf("projects[0] has legacy PascalCase key %q — wire format must be snake_case", key)
+		}
+	}
+	if p["cooldown_s"].(float64) != 900 {
+		t.Errorf("cooldown_s = %v, want 900", p["cooldown_s"])
+	}
+	if p["enabled"].(bool) != true {
+		t.Errorf("enabled = %v, want true", p["enabled"])
+	}
+}
+
+// TestConformance_WireFormat_Status asserts GET /api/v1/status exposes
+// active_projects (README previously documented the nonexistent
+// project_count).
+func TestConformance_WireFormat_Status(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+
+	status, body := a.do(t, "GET", "/api/v1/status", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if _, ok := body["active_projects"]; !ok {
+		t.Errorf("status response missing active_projects: %v", body)
+	}
+	if _, ok := body["project_count"]; ok {
+		t.Error("status response has project_count — contract field is active_projects")
+	}
+}
+
+// TestConformance_WireFormat_Ticks asserts tick records serialize snake_case
+// (project_name, session_id, spawned_at, weight_used, cost_usd).
+func TestConformance_WireFormat_Ticks(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+
+	tickID := database.NextTickID("alpha")
+	if err := database.CreateTick(context.Background(), a.db, &database.Tick{
+		ID:          tickID,
+		ProjectName: "alpha",
+		Status:      database.StatusQueued,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("CreateTick: %v", err)
+	}
+
+	status, body := a.do(t, "GET", "/api/v1/ticks", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	ticks := body["ticks"].([]interface{})
+	if len(ticks) != 1 {
+		t.Fatalf("got %d ticks, want 1", len(ticks))
+	}
+	tk := ticks[0].(map[string]interface{})
+	for _, key := range []string{"id", "project_name", "session_id", "status", "spawned_at", "completed_at", "exit_code", "tokens_in", "tokens_out", "cost_usd", "weight_used", "created_at"} {
+		if _, ok := tk[key]; !ok {
+			t.Errorf("ticks[0] missing snake_case key %q: %v", key, tk)
+		}
+	}
+	for _, key := range []string{"ID", "ProjectName", "SessionID", "SpawnedAt", "WeightUsed", "CostUSD"} {
+		if _, ok := tk[key]; ok {
+			t.Errorf("ticks[0] has legacy PascalCase key %q — wire format must be snake_case", key)
+		}
+	}
+	if tk["project_name"].(string) != "alpha" {
+		t.Errorf("project_name = %v, want alpha", tk["project_name"])
+	}
+}
+
+// TestConformance_WireFormat_Events asserts event records serialize
+// snake_case (created_at), never PascalCase (CreatedAt).
+func TestConformance_WireFormat_Events(t *testing.T) {
+	a := newAPITestServer(t)
+	if err := database.LogEvent(context.Background(), a.db, &database.Event{
+		Severity:  database.SeverityInfo,
+		Component: "conformance-test",
+		Message:   "wire format check",
+	}); err != nil {
+		t.Fatalf("LogEvent: %v", err)
+	}
+
+	status, body := a.do(t, "GET", "/api/v1/events", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	events := body["events"].([]interface{})
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	ev := events[0].(map[string]interface{})
+	for _, key := range []string{"id", "severity", "component", "message", "details", "created_at"} {
+		if _, ok := ev[key]; !ok {
+			t.Errorf("events[0] missing snake_case key %q: %v", key, ev)
+		}
+	}
+	for _, key := range []string{"ID", "Severity", "Component", "Message", "CreatedAt"} {
+		if _, ok := ev[key]; ok {
+			t.Errorf("events[0] has legacy PascalCase key %q — wire format must be snake_case", key)
+		}
+	}
+}

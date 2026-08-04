@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -166,20 +167,108 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 // Only non-nil fields are written. Pointer types distinguish "unset" from
 // "set to zero value".
 type ProjectUpdates struct {
-	RepoURL        *string
-	Workdir        *string
-	Weight         *int
-	Priority       *int
-	CooldownS      *int
-	DecayRate      *float64
-	Model          *string
-	Provider       *string
-	WorkerModel    *string
-	WorkerProvider *string
-	GatewayKey     *string // per-foreman Hermes gateway key; "" clears back to shared key
-	Command        *string
-	NamespaceID    *string // set to "" to unassign from namespace
-	Enabled        *bool
+	RepoURL        *string  `json:"repo_url"`
+	Workdir        *string  `json:"workdir"`
+	Weight         *int     `json:"weight"`
+	Priority       *int     `json:"priority"`
+	CooldownS      *int     `json:"cooldown_s"`
+	DecayRate      *float64 `json:"decay_rate"`
+	Model          *string  `json:"model"`
+	Provider       *string  `json:"provider"`
+	WorkerModel    *string  `json:"worker_model"`
+	WorkerProvider *string  `json:"worker_provider"`
+	GatewayKey     *string  `json:"gateway_key"` // per-foreman Hermes gateway key; "" clears back to shared key
+	Command        *string  `json:"command"`
+	NamespaceID    *string  `json:"namespace_id"` // set to "" to unassign from namespace
+	Enabled        *bool    `json:"enabled"`
+}
+
+// UnmarshalJSON decodes ProjectUpdates from JSON. Canonical keys are
+// snake_case, but live fleet automation (fleet-auto-heal, stand-in
+// gap-pusher scripts) still PUTs the legacy PascalCase Go field names
+// (CooldownS, Enabled, DecayRate, …). After the standard tag-based decode,
+// each nil pointer is back-filled from its legacy PascalCase key so both
+// spellings keep working. Explicit zero values (e.g. "enabled": false)
+// always bind through the pointer and are never overridden.
+func (u *ProjectUpdates) UnmarshalJSON(data []byte) error {
+	// Alias avoids infinite recursion through this method.
+	type updatesAlias ProjectUpdates
+	var a updatesAlias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*u = ProjectUpdates(a)
+
+	var legacy map[string]json.RawMessage
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	fill := func(key string, dst any, set func()) {
+		raw, ok := legacy[key]
+		if !ok {
+			return
+		}
+		if err := json.Unmarshal(raw, dst); err == nil {
+			set()
+		}
+	}
+	if u.RepoURL == nil {
+		var v string
+		fill("RepoURL", &v, func() { u.RepoURL = &v })
+	}
+	if u.Workdir == nil {
+		var v string
+		fill("Workdir", &v, func() { u.Workdir = &v })
+	}
+	if u.Weight == nil {
+		var v int
+		fill("Weight", &v, func() { u.Weight = &v })
+	}
+	if u.Priority == nil {
+		var v int
+		fill("Priority", &v, func() { u.Priority = &v })
+	}
+	if u.CooldownS == nil {
+		var v int
+		fill("CooldownS", &v, func() { u.CooldownS = &v })
+	}
+	if u.DecayRate == nil {
+		var v float64
+		fill("DecayRate", &v, func() { u.DecayRate = &v })
+	}
+	if u.Model == nil {
+		var v string
+		fill("Model", &v, func() { u.Model = &v })
+	}
+	if u.Provider == nil {
+		var v string
+		fill("Provider", &v, func() { u.Provider = &v })
+	}
+	if u.WorkerModel == nil {
+		var v string
+		fill("WorkerModel", &v, func() { u.WorkerModel = &v })
+	}
+	if u.WorkerProvider == nil {
+		var v string
+		fill("WorkerProvider", &v, func() { u.WorkerProvider = &v })
+	}
+	if u.GatewayKey == nil {
+		var v string
+		fill("GatewayKey", &v, func() { u.GatewayKey = &v })
+	}
+	if u.Command == nil {
+		var v string
+		fill("Command", &v, func() { u.Command = &v })
+	}
+	if u.NamespaceID == nil {
+		var v string
+		fill("NamespaceID", &v, func() { u.NamespaceID = &v })
+	}
+	if u.Enabled == nil {
+		var v bool
+		fill("Enabled", &v, func() { u.Enabled = &v })
+	}
+	return nil
 }
 
 // UpdateProject applies the given updates to the project named name. Only
