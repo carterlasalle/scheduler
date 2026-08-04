@@ -216,8 +216,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				atomic.AddInt64(&s.spawnCountHTTP, 1)
 				text := resp.ExtractText()
 				now := time.Now()
-				_, _ = s.db.Exec(`UPDATE ticks SET status='completed', outcome='ok', spawned_at=?, finished_at=?, output=?, session_id='gateway' WHERE id=?`,
-					now.Format(time.RFC3339), now.Format(time.RFC3339), text, tickID)
+				// NOTE: tick completion is handled by slot_pool → lifecycle.Complete
+				// (correct columns + outcome CHECK). The legacy direct UPDATE here was
+				// removed in GAP-002 — it referenced non-existent columns
+				// (finished_at, output) and outcome='ok' violated the ticks CHECK, so
+				// it silently no-oped on every run.
 				_, _ = s.db.Exec(`UPDATE projects SET last_tick_started = ? WHERE name = ?`,
 					now.Format(time.RFC3339), project.Name)
 
