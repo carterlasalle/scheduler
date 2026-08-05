@@ -59,6 +59,7 @@ func TestSpawn_ForwardsPerForemanGatewayKey(t *testing.T) {
 	}
 	if tick == nil {
 		t.Fatal("Spawn returned nil tick on gateway success")
+		return
 	}
 
 	if capturedAuth != "Bearer fk-test-abc" {
@@ -106,6 +107,7 @@ func TestSpawn_EmptyGatewayKeyFallsBackToDaemonKey(t *testing.T) {
 	}
 	if tick == nil {
 		t.Fatal("Spawn returned nil tick on gateway success")
+		return
 	}
 
 	if capturedAuth != "Bearer sk-daemon-shared" {
