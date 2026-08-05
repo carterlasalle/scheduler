@@ -3,7 +3,9 @@ package sync
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,6 +45,19 @@ type DuckBrainSync struct {
 	pendingSpool []spoolItem
 	// pendingEvents buffers one-shot HIGH/recovery events for the cycle.
 	pendingEvents []pendingSyncEvent
+
+	// dedupCache holds mem_key -> last-synced content hash, loaded once at
+	// the start of each cycle from duckbrain_sync_dedup. postMemory checks
+	// against this in-memory copy (never mid-iteration DB reads) to skip
+	// re-posting content that hasn't actually changed since the last
+	// successful sync — without this, every cycle re-posted every memory
+	// unconditionally and DuckBrain (no upsert-by-key) grew a duplicate row
+	// per key per cycle forever (S-GAP-002).
+	dedupCache map[string]string
+	// pendingDedup buffers newly-synced hashes for the cycle, flushed to
+	// duckbrain_sync_dedup in flushPending once no rows cursor is open
+	// (same single-connection guard as pendingSpool/pendingEvents).
+	pendingDedup map[string]string
 }
 
 // spoolItem is a buffered failed write awaiting DB persistence.
@@ -127,6 +142,17 @@ func (d *DuckBrainSync) Run(ctx context.Context) {
 func (d *DuckBrainSync) syncOnce(ctx context.Context) {
 	log.Println("SYNC: running sync cycle")
 
+	// Load the dedup cache once, before any row-iterating sync function
+	// opens a cursor on the single DB connection (SetMaxOpenConns(1)).
+	// postMemory reads this in-memory copy only — no DB access mid-cycle.
+	if cache, err := database.LoadSyncedContentHashes(ctx, d.db); err != nil {
+		log.Printf("SYNC: load dedup cache: %v", err)
+	} else {
+		d.mu.Lock()
+		d.dedupCache = cache
+		d.mu.Unlock()
+	}
+
 	// Phase 0: replay anything spooled from previous failures. This is the
 	// fallback path — spooled writes are re-attempted before fresh syncs so
 	// nothing is lost when DuckBrain comes back online.
@@ -184,6 +210,8 @@ func (d *DuckBrainSync) flushPending(ctx context.Context) {
 	d.pendingSpool = nil
 	events := d.pendingEvents
 	d.pendingEvents = nil
+	dedup := d.pendingDedup
+	d.pendingDedup = nil
 	d.mu.Unlock()
 
 	for _, it := range spool {
@@ -200,6 +228,11 @@ func (d *DuckBrainSync) flushPending(ctx context.Context) {
 			Message:   ev.message,
 			Details:   ev.details,
 		})
+	}
+	for key, hash := range dedup {
+		if err := database.RecordSyncedContentHash(ctx, d.db, key, hash); err != nil {
+			log.Printf("SYNC: record synced hash %s failed: %v", key, err)
+		}
 	}
 }
 
@@ -536,6 +569,11 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 		return fmt.Errorf("marshal content: %w", err)
 	}
 
+	hash := stableContentHash(payload)
+	if d.alreadySynced(key, hash) {
+		return nil
+	}
+
 	body := map[string]any{
 		"key":        key,
 		"domain":     domain,
@@ -556,7 +594,57 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 		return postErr
 	}
 	d.recordSuccess()
+	d.markSynced(key, hash)
 	return nil
+}
+
+// stableContentHash hashes content's JSON payload with any "synced_at"
+// field stripped first. fleetSummary/projectStatus/namespaceSummary/
+// namespaceStatus all stamp a fresh "now" into synced_at on every cycle,
+// which would otherwise make identical underlying state hash differently
+// every 5 minutes and defeat dedup entirely. sdlcEvent/tickLifecycle use
+// distinct field names (created_at/spawned_at/completed_at) for their own
+// actual data, not a churn timestamp, so they're hashed as-is — a genuinely
+// new or changed event/tick must never be treated as a duplicate.
+func stableContentHash(payload []byte) string {
+	var asMap map[string]any
+	if err := json.Unmarshal(payload, &asMap); err == nil {
+		if _, ok := asMap["synced_at"]; ok {
+			delete(asMap, "synced_at")
+			if stable, err := json.Marshal(asMap); err == nil {
+				payload = stable
+			}
+		}
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+// alreadySynced reports whether key was last successfully synced with this
+// exact content hash, per the in-cycle dedup cache loaded at the start of
+// syncOnce. A nil/missing cache (e.g. postMemory called directly, outside
+// syncOnce) never skips.
+func (d *DuckBrainSync) alreadySynced(key, hash string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.dedupCache != nil && d.dedupCache[key] == hash
+}
+
+// markSynced records a successful post's content hash in the in-memory
+// cache immediately (so later keys in the same cycle see it) and queues it
+// for persistence to duckbrain_sync_dedup, flushed in flushPending once no
+// rows cursor is open on the single DB connection.
+func (d *DuckBrainSync) markSynced(key, hash string) {
+	d.mu.Lock()
+	if d.dedupCache == nil {
+		d.dedupCache = make(map[string]string)
+	}
+	d.dedupCache[key] = hash
+	if d.pendingDedup == nil {
+		d.pendingDedup = make(map[string]string)
+	}
+	d.pendingDedup[key] = hash
+	d.mu.Unlock()
 }
 
 // bufferSpool queues a failed write for persistence. In-memory only —
@@ -567,6 +655,19 @@ func (d *DuckBrainSync) bufferSpool(key, domain, content string) {
 	d.mu.Unlock()
 }
 
+// maxRateLimitRetries bounds how many times postMemoryBody retries a single
+// write after a 429 before giving up and letting the caller spool it for
+// the next cycle. DuckBrain's rate limiter keys on source IP, so localhost
+// (scheduler + gateway + cron jobs + this reflection process) shares one
+// bucket — a short in-request backoff absorbs a transient shared-bucket
+// burst instead of immediately spooling and waiting a full 5-minute cycle
+// to retry (S-GAP-002).
+const maxRateLimitRetries = 2
+
+// rateLimitBackoff is the initial delay before the first 429 retry; it
+// doubles on each subsequent retry.
+const rateLimitBackoff = 200 * time.Millisecond
+
 // postMemoryBody posts a raw memory envelope to DuckBrain and returns the
 // transport/app error. It does NOT spool — callers decide fallback policy.
 func (d *DuckBrainSync) postMemoryBody(ctx context.Context, body map[string]any, key string) error {
@@ -576,29 +677,48 @@ func (d *DuckBrainSync) postMemoryBody(ctx context.Context, body map[string]any,
 	}
 
 	url := fmt.Sprintf("%s/api/memories?namespace=%s", d.baseURL, d.namespace)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+	backoff := rateLimitBackoff
 
-	resp, err := d.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("http post: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
+		if err != nil {
+			return fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
 
-	if resp.StatusCode == http.StatusTooManyRequests {
-		// Rate limited (DuckBrain default 100/min; fleet burst can exceed).
-		// Retryable — stop the burst; remaining writes spool for next cycle.
-		return fmt.Errorf("duckbrain rate limited (429)")
-	}
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("duckbrain api returned %d: %s", resp.StatusCode, string(respBody))
-	}
+		resp, err := d.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("http post: %w", err)
+		}
 
-	return nil
+		if resp.StatusCode == http.StatusTooManyRequests {
+			_ = resp.Body.Close()
+			if attempt >= maxRateLimitRetries {
+				// Rate limited (DuckBrain default 100/min; shared localhost
+				// bucket can exceed it). Retries exhausted — caller spools
+				// for next cycle.
+				return fmt.Errorf("duckbrain rate limited (429) after %d retries", attempt)
+			}
+			log.Printf("SYNC: %s rate limited (429), retrying in %s (attempt %d/%d)",
+				key, backoff, attempt+1, maxRateLimitRetries)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			continue
+		}
+
+		if resp.StatusCode >= 400 {
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			_ = resp.Body.Close()
+			return fmt.Errorf("duckbrain api returned %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		_ = resp.Body.Close()
+		return nil
+	}
 }
 
 // recordSuccess updates health after a successful write and queues a

@@ -741,7 +741,7 @@ func TestRun_StartsAndStops(t *testing.T) {
 		close(runDone)
 	}()
 
-	// Wait for the initial syncOnce + possibly one tick.
+	// Wait for the initial syncOnce + several ticks.
 	time.Sleep(500 * time.Millisecond)
 
 	cancel()
@@ -753,8 +753,124 @@ func TestRun_StartsAndStops(t *testing.T) {
 		t.Fatal("Run did not stop within 2s of cancel")
 	}
 
-	if callCount < 4 {
-		t.Errorf("callCount = %d, want at least 4 (initial syncOnce)", callCount)
+	// Project p1's state never changes across ticks, so only the first
+	// cycle should actually POST (fleet summary + project status +
+	// namespace summary = 3); every later tick's identical content must be
+	// deduped, not resent (S-GAP-002 regression guard — before the fix this
+	// grew unboundedly with every tick).
+	if callCount != 3 {
+		t.Errorf("callCount = %d, want 3 (initial cycle only; later ticks should be deduped)", callCount)
+	}
+}
+
+func TestSyncOnce_DedupSkipsUnchangedAcrossCycles(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	insertProject(t, db, "p1", "r1", "w1", 1)
+	if _, err := db.Exec(`INSERT INTO namespaces (id, weight, reserved, hard_cap, enabled) VALUES ('ns1', 10, 1, 100, 1)`); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	ctx := context.Background()
+	if err := database.LogEvent(ctx, db, &database.Event{
+		Severity:  database.SeverityInfo,
+		Component: "sync",
+		Message:   "sync cycle event",
+	}); err != nil {
+		t.Fatalf("LogEvent: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO ticks (id, project_name, status, created_at) VALUES ('p1-2026-07-31-12-00-00', 'p1', 'completed', ?)`, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		t.Fatalf("insert tick: %v", err)
+	}
+
+	var callCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	s := NewDuckBrainSync(db, "test-ns", srv.URL)
+
+	s.syncOnce(ctx)
+	if callCount != 6 {
+		t.Fatalf("after first cycle: callCount = %d, want 6", callCount)
+	}
+
+	s.syncOnce(ctx)
+	if callCount != 6 {
+		t.Errorf("after second cycle (unchanged data): callCount = %d, want still 6 (all reposts should be deduped)", callCount)
+	}
+
+	// Change project weight — that key's content must be re-synced.
+	if _, err := db.Exec(`UPDATE projects SET weight = 55 WHERE name = 'p1'`); err != nil {
+		t.Fatalf("update project: %v", err)
+	}
+	s.syncOnce(ctx)
+	if callCount != 7 {
+		t.Errorf("after third cycle (project weight changed): callCount = %d, want 7 (only the changed key resyncs)", callCount)
+	}
+}
+
+func TestPostMemoryBody_RetriesOn429ThenSucceeds(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts <= 2 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	s := NewDuckBrainSync(db, "test-ns", srv.URL)
+	ctx := context.Background()
+
+	err = s.postMemory(ctx, "/key", "config", "val")
+	if err != nil {
+		t.Fatalf("postMemory: %v", err)
+	}
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3 (2 rate-limited + 1 success)", attempts)
+	}
+}
+
+func TestPostMemoryBody_GivesUpAfter429Retries(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	s := NewDuckBrainSync(db, "test-ns", srv.URL)
+	ctx := context.Background()
+
+	err = s.postMemory(ctx, "/key", "config", "val")
+	if err == nil {
+		t.Fatal("expected error after exhausting 429 retries, got nil")
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Errorf("error should mention 429, got: %v", err)
+	}
+	if attempts != maxRateLimitRetries+1 {
+		t.Errorf("attempts = %d, want %d (initial + %d retries)", attempts, maxRateLimitRetries+1, maxRateLimitRetries)
 	}
 }
 

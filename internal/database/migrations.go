@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 9
+const latestMigration = 10
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -185,6 +185,17 @@ CREATE INDEX IF NOT EXISTS idx_sync_spool_created ON sync_spool(created_at);
 		desc:    "add consecutive_failures counter to projects for spawn-failure backoff (S-GAP-001)",
 		stmt: `
 ALTER TABLE projects ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		version: 10,
+		desc:    "add duckbrain_sync_dedup table to make DuckBrainSync idempotent (S-GAP-002)",
+		stmt: `
+CREATE TABLE IF NOT EXISTS duckbrain_sync_dedup (
+    mem_key      TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    synced_at    TEXT NOT NULL
+);
 `,
 	},
 }
