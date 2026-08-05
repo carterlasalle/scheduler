@@ -205,7 +205,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 		prompt := fmt.Sprintf(
 			"[Scheduler tick: %s] "+
-				"Load skills coding-hermes-foreman, coding-hermes-cron, hilo-usage, gitreins. "+
+				"Load skills coding-hermes-board, coding-hermes-model-router, coding-hermes-never-done, hilo, gitreins-usage. "+
 				"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
 				"Workdir: %s. "+
 				"IMPORTANT: You are a FOREMAN, not a worker. Browser/interactive work belongs in workers (delegate). "+
@@ -270,10 +270,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			"chat", "-q", prompt,
 			"-m", model,
 			"--provider", provider,
-			"-s", "coding-hermes-foreman",
-			"-s", "coding-hermes-cron",
-			"-s", "hilo-usage",
-			"-s", "gitreins",
+			"-s", "coding-hermes-board",
+			"-s", "coding-hermes-model-router",
+			"-s", "coding-hermes-never-done",
+			"-s", "hilo",
+			"-s", "gitreins-usage",
 			"--ignore-rules", "-Q",
 		}
 
