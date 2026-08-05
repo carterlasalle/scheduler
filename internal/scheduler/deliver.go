@@ -71,7 +71,7 @@ func deliverAlert(deliver, project, tickID, reason string) {
 	defer f.Close()
 	_, _ = f.WriteString(msg)
 	f.Close()
-	cmd := exec.Command("hermes", "send", "-f", f.Name(), deliver)
+	cmd := exec.Command("hermes", "send", "--to", deliver, "--subject", fmt.Sprintf("⚠️ %s", project), "--file", f.Name())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("ALERT: send failed: %v (%s)", err, bytes.TrimSpace(out))
