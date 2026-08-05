@@ -42,23 +42,24 @@ func NewPacker(db *sql.DB, calc *UrgencyCalculator, budget, maxConcurrent int, b
 
 // scored is a project with its computed urgency.
 type scored struct {
-	name           string
-	priority       float64
-	weight         int
-	urgency        float64
-	decayRate      float64
-	cooldownS      int
-	lastTickAt     *time.Time
-	createdAt      time.Time
-	workdir        string
-	repoURL        string
-	command        string
-	model          string
-	provider       string
-	workerModel    string
-	workerProvider string
-	gatewayKey     string
-	deliver        string
+	name                string
+	priority            float64
+	weight              int
+	urgency             float64
+	decayRate           float64
+	cooldownS           int
+	consecutiveFailures int
+	lastTickAt          *time.Time
+	createdAt           time.Time
+	workdir             string
+	repoURL             string
+	command             string
+	model               string
+	provider            string
+	workerModel         string
+	workerProvider      string
+	gatewayKey          string
+	deliver             string
 }
 
 // Pick returns the selected projects for this tick, sorted by urgency desc.
@@ -67,7 +68,8 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		SELECT name, weight, priority, decay_rate, enabled, cooldown_s,
 		       last_tick_completed,
 		       created_at, workdir, repo_url, COALESCE(command, ''),
-		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(gateway_key, ''), COALESCE(deliver, '')
+		       COALESCE(model, ''), COALESCE(provider, ''), COALESCE(worker_model, ''), COALESCE(worker_provider, ''), COALESCE(gateway_key, ''), COALESCE(deliver, ''),
+		       consecutive_failures
 		FROM projects
 		WHERE enabled = 1
 		ORDER BY name
@@ -87,7 +89,8 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		var enabled bool
 		if err := rows.Scan(&s.name, &s.weight, &s.priority, &s.decayRate, &enabled, &s.cooldownS,
 			&lastStr, &createdAtStr, &s.workdir, &s.repoURL, &s.command,
-			&s.model, &s.provider, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver); err != nil {
+			&s.model, &s.provider, &s.workerModel, &s.workerProvider, &s.gatewayKey, &s.deliver,
+			&s.consecutiveFailures); err != nil {
 			log.Printf("ERROR scanning project row: %v", err)
 			continue
 		}
@@ -99,6 +102,13 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			}
 		}
 		s.urgency = p.calculator.ComputeUrgency(s.priority, s.decayRate, now, lastCompleted, s.createdAt)
+		// S-GAP-001 fairness: starvation boost in the flat path too, or the
+		// two selection paths would diverge.
+		if isStarving(s.cooldownS, s.consecutiveFailures, lastCompleted, s.createdAt, now) && s.urgency < starvationBoostUrgency {
+			s.urgency = starvationBoostUrgency
+			log.Printf("FAIRNESS: %s boosted in flat packer (cooldown=%ds failures=%d window=%v)",
+				s.name, s.cooldownS, s.consecutiveFailures, StarvationWindow(s.cooldownS))
+		}
 		s.lastTickAt = lastCompleted
 		list = append(list, s)
 	}
@@ -169,6 +179,10 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		if s.cooldownS == 0 {
 			// Dynamic: derive from priority via urgency calculator.
 			cooldownDur = p.calculator.ComputeInterval(s.priority)
+		}
+		// S-GAP-001: consecutive spawn failures back off exponentially.
+		if s.consecutiveFailures > 0 {
+			cooldownDur = FailureBackoff(cooldownDur, s.consecutiveFailures)
 		}
 		// Apply blackout slowdown if inside a peak-pricing window.
 		if mult, inBlackout := config.ActiveMultiplier(p.blackoutWindows, now); inBlackout {

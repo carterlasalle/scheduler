@@ -116,6 +116,13 @@ func (m *MultiPoolPacker) packFlat(
 		urgency := urgencyCalc.ComputeUrgency(
 			float64(p.Priority), p.DecayRate, now, lastTick, createdAt,
 		)
+		// S-GAP-001 fairness: starvation boost applies in the flat fallback
+		// too, or the two selection paths would diverge.
+		if isStarving(p.CooldownS, p.ConsecutiveFailures, lastTick, createdAt, now) && urgency < starvationBoostUrgency {
+			urgency = starvationBoostUrgency
+			log.Printf("FAIRNESS: %s boosted in flat fallback (cooldown=%ds failures=%d window=%v)",
+				p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS))
+		}
 		list = append(list, scored{proj: *p, urgency: urgency, lastTick: lastTick})
 	}
 
@@ -153,6 +160,10 @@ func (m *MultiPoolPacker) packFlat(
 		// Cooldown check.
 		if s.lastTick != nil {
 			cooldownDur := time.Duration(s.proj.CooldownS) * time.Second
+			// S-GAP-001: consecutive spawn failures back off exponentially.
+			if s.proj.ConsecutiveFailures > 0 {
+				cooldownDur = FailureBackoff(cooldownDur, s.proj.ConsecutiveFailures)
+			}
 			if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout {
 				if mult <= 0 {
 					continue

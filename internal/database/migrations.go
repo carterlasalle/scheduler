@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 8
+const latestMigration = 9
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -178,6 +178,13 @@ CREATE TABLE IF NOT EXISTS sync_spool (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sync_spool_created ON sync_spool(created_at);
+`,
+	},
+	{
+		version: 9,
+		desc:    "add consecutive_failures counter to projects for spawn-failure backoff (S-GAP-001)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
 `,
 	},
 }

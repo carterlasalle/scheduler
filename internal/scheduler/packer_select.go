@@ -103,6 +103,14 @@ func (m *MultiPoolPacker) Pack(
 			urgency := urgencyCalc.ComputeUrgency(
 				float64(p.Priority), p.DecayRate, now, lastTick, createdAt,
 			)
+			// S-GAP-001 fairness: an eligible project whose last attempt is
+			// older than its starvation window jumps the urgency queue so the
+			// prio-10 cohort cannot starve it indefinitely.
+			if isStarving(p.CooldownS, p.ConsecutiveFailures, lastTick, createdAt, now) && urgency < starvationBoostUrgency {
+				urgency = starvationBoostUrgency
+				log.Printf("FAIRNESS: %s boosted (cooldown=%ds failures=%d window=%v) — starvation guarantee",
+					p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS))
+			}
 
 			effW := CalcEffectiveWeight(p.Weight, totalWeightInNS, alloc)
 			scored = append(scored, ProjectUrgency{
@@ -150,6 +158,10 @@ func (m *MultiPoolPacker) Pack(
 			// Cooldown check with blackout slowdown.
 			if lt, ok := lastCompleted[pu.Project.Name]; ok {
 				cooldownDur := time.Duration(pu.Project.CooldownS) * time.Second
+				// S-GAP-001: consecutive spawn failures back off exponentially.
+				if pu.Project.ConsecutiveFailures > 0 {
+					cooldownDur = FailureBackoff(cooldownDur, pu.Project.ConsecutiveFailures)
+				}
 				// Apply blackout slowdown if inside a peak-pricing window.
 				if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout {
 					if mult <= 0 {
@@ -190,6 +202,10 @@ func (m *MultiPoolPacker) Pack(
 				// Check if it was skipped by cooldown — those are NOT queued.
 				if lt, ok := lastCompleted[pu.Project.Name]; ok {
 					cooldownDur := time.Duration(pu.Project.CooldownS) * time.Second
+					// S-GAP-001: consecutive spawn failures back off exponentially.
+					if pu.Project.ConsecutiveFailures > 0 {
+						cooldownDur = FailureBackoff(cooldownDur, pu.Project.ConsecutiveFailures)
+					}
 					// Apply blackout slowdown if inside a peak-pricing window.
 					if mult, inBlackout := config.ActiveMultiplier(m.blackoutWindows, now); inBlackout {
 						if mult <= 0 {
