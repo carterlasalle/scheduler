@@ -80,6 +80,17 @@ func getEnvOrDefault(envVar, fallback string) string {
 	return fallback
 }
 
+// noteSpawnFailure increments the project's consecutive spawn-failure counter,
+// which drives the exponential selection backoff (S-GAP-001). Best-effort:
+// a DB error here must never mask the real spawn error.
+func (s *Spawner) noteSpawnFailure(project string) {
+	if _, err := s.db.Exec(
+		`UPDATE projects SET consecutive_failures = consecutive_failures + 1 WHERE name = ?`,
+		project); err != nil {
+		log.Printf("WARN: consecutive_failures increment for %s: %v", project, err)
+	}
+}
+
 // SetForemanHome overrides the default HERMES_HOME for foreman sessions.
 func (s *Spawner) SetForemanHome(path string) {
 	s.foremanHome = path
@@ -221,7 +232,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				// removed in GAP-002 — it referenced non-existent columns
 				// (finished_at, output) and outcome='ok' violated the ticks CHECK, so
 				// it silently no-oped on every run.
-				_, _ = s.db.Exec(`UPDATE projects SET last_tick_started = ? WHERE name = ?`,
+				// S-GAP-001: a successful spawn also resets the consecutive-failure
+				// backoff counter.
+				_, _ = s.db.Exec(`UPDATE projects SET last_tick_started = ?, consecutive_failures = 0 WHERE name = ?`,
 					now.Format(time.RFC3339), project.Name)
 
 				log.Printf("GATEWAY: %s tick=%s tokens=%d/%d",
@@ -241,6 +254,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
 			if s.noExecFallback {
 				log.Printf("SKIPPED: %s tick=%s exec fallback disabled, dropping tick", project.Name, tickID)
+				s.noteSpawnFailure(project.Name)
 				return nil, fmt.Errorf("gateway unreachable and exec fallback disabled: %w", gwErr)
 			}
 		}
@@ -275,15 +289,18 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		s.noteSpawnFailure(project.Name)
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		s.noteSpawnFailure(project.Name)
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
+		s.noteSpawnFailure(project.Name)
 		return nil, fmt.Errorf("start process: %w", err)
 	}
 
@@ -356,7 +373,9 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		log.Printf("ERROR updating tick %s to running: %v", tickID, err)
 	}
 	// Also set last_tick_started on the project so cooldown tracking works.
-	_, _ = s.db.Exec(`UPDATE projects SET last_tick_started = ? WHERE name = ?`,
+	// S-GAP-001: a successful spawn resets the consecutive-failure backoff
+	// counter (atomically with the last_tick_started write).
+	_, _ = s.db.Exec(`UPDATE projects SET last_tick_started = ?, consecutive_failures = 0 WHERE name = ?`,
 		st.Started.Format(time.RFC3339), project.Name)
 
 	log.Printf("SPAWN: %s tick=%s pid=%d workdir=%s", project.Name, tickID, st.PID, project.Workdir)

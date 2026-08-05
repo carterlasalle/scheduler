@@ -23,6 +23,13 @@ type Project struct {
 	Enabled        bool    `json:"enabled"`         // disabled projects are never scheduled
 	CreatedAt      string  `json:"created_at"`      // RFC3339 timestamp
 	UpdatedAt      string  `json:"updated_at"`      // RFC3339 timestamp
+
+	// ConsecutiveFailures counts consecutive SPAWN failures (gateway
+	// unreachable, process start error). Incremented by Spawner.Spawn on
+	// failure, reset to 0 on the first successful spawn. Drives the
+	// exponential selection backoff (S-GAP-001). Internal scheduler state —
+	// not user-editable via ProjectUpdates.
+	ConsecutiveFailures int `json:"consecutive_failures"`
 }
 
 // UnmarshalJSON decodes a Project from JSON. Canonical S06 keys are

@@ -129,12 +129,17 @@ func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *
 		st, err := p.spawner.Spawn(proj, tickID)
 		if err != nil {
 			log.Printf("SPAWN: %s failed: %v", proj.Name, err)
+			// Finished MUST be set: lifecycle.Complete persists it as
+			// completed_at, and the packer's cooldown/backoff/starvation logic
+			// keys off that timestamp. Leaving it zero ("0001-01-01") froze the
+			// last-attempt clock and let spawn failures storm (S-GAP-001).
 			_ = p.lifecycle.Complete(TickOutcome{
-				TickID:  tickID,
-				Project: proj.Name,
-				Started: now,
-				Status:  TickFailed,
-				Error:   err.Error(),
+				TickID:   tickID,
+				Project:  proj.Name,
+				Started:  now,
+				Finished: time.Now(),
+				Status:   TickFailed,
+				Error:    err.Error(),
 			})
 			return
 		}
