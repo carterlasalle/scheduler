@@ -205,11 +205,12 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 		prompt := fmt.Sprintf(
 			"[Scheduler tick: %s] "+
-				"Load skills coding-hermes-board, coding-hermes-model-router, coding-hermes-never-done, hilo, gitreins-usage. "+
+				"Load skills coding-hermes-board, coding-hermes-model-router, coding-hermes-never-done, coding-hermes-specs, coding-hermes-testing, coding-hermes-middle-out, systematic-debugging, trust-but-verify, reality-validation, github-pr-workflow, github-repo-management, hilo, gitreins-usage. "+
 				"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
 				"Workdir: %s. "+
 				"IMPORTANT: You are a FOREMAN, not a worker. Browser/interactive work belongs in workers (delegate). "+
 				"Format your final output as clean, well-structured markdown with tables and sections. "+
+				"After completing a task, follow the gitreins task lifecycle (create/complete/delete) so the LLM judge evaluates real code. "+
 				"%s"+
 				"Report result.",
 			tickID, project.Workdir,
@@ -273,6 +274,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			"-s", "coding-hermes-board",
 			"-s", "coding-hermes-model-router",
 			"-s", "coding-hermes-never-done",
+			"-s", "coding-hermes-specs",
+			"-s", "coding-hermes-testing",
+			"-s", "coding-hermes-middle-out",
+			"-s", "systematic-debugging",
+			"-s", "trust-but-verify",
+			"-s", "reality-validation",
+			"-s", "github-pr-workflow",
+			"-s", "github-repo-management",
 			"-s", "hilo",
 			"-s", "gitreins-usage",
 			"--ignore-rules", "-Q",
