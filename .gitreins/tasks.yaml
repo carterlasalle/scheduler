@@ -651,3 +651,19 @@ tasks:
   status: complete
   created_at: '2026-08-05T11:56:36.244015+00:00'
   completed_at: '2026-08-05T11:56:44.692422+00:00'
+- id: dogfood005-delete-endpoint
+  title: 'DOGFOOD-005: DELETE /api/v1/projects/{name} soft-delete endpoint'
+  criteria:
+  - DELETE /api/v1/projects/{name} without ?confirm=true returns 400
+  - DELETE /api/v1/projects/{name}?confirm=true on an enabled project returns 409
+    with pause-first message
+  - DELETE /api/v1/projects/{name}?confirm=true on a disabled project returns 200
+    and sets enabled=false (row retained)
+  - DELETE /api/v1/projects/{name}?confirm=true on unknown project returns 404
+  - openapiSpec includes a delete operation under /api/v1/projects/{name}
+  - specs/S06-rest-api.md no longer claims there is no delete endpoint and documents
+    the DELETE operation
+  - AGENTS.md documents sqlite3 soft-delete fallback incantation
+  status: complete
+  created_at: '2026-08-05T17:52:01.937656+00:00'
+  completed_at: '2026-08-05T17:52:07.029963+00:00'
