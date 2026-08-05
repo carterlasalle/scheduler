@@ -32,6 +32,7 @@ func TestNewSpawner_Defaults(t *testing.T) {
 	s := NewSpawner(db, 5)
 	if s == nil {
 		t.Fatal("NewSpawner returned nil")
+		return
 	}
 	if s.ActiveCount() != 0 {
 		t.Errorf("initial ActiveCount = %d, want 0", s.ActiveCount())

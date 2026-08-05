@@ -53,6 +53,7 @@ func TestGatewayClient_SendResponse_DisablesApprovals(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("expected non-nil response")
+		return
 	}
 
 	// Parse captured body and verify require_approval field.

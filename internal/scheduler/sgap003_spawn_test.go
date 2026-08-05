@@ -110,6 +110,7 @@ func TestSpawn_GatewayTickRowHasSessionIDAndHeartbeat(t *testing.T) {
 	}
 	if res.tick == nil {
 		t.Fatal("Spawn returned nil tick on gateway success")
+		return
 	}
 	outcome := res.tick.Wait()
 	if outcome.Status != TickCompleted {

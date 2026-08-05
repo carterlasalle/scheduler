@@ -56,6 +56,7 @@ func TestNewDuckBrainSync(t *testing.T) {
 	}
 	if s.httpClient == nil {
 		t.Fatal("httpClient is nil")
+		return
 	}
 	if s.httpClient.Timeout != 10*time.Second {
 		t.Errorf("httpClient.Timeout = %v, want 10s", s.httpClient.Timeout)

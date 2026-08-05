@@ -86,6 +86,7 @@ func TestSpawn_GatewaySuccessResetsConsecutiveFailures(t *testing.T) {
 	}
 	if tick == nil {
 		t.Fatal("Spawn returned nil tick on gateway success")
+		return
 	}
 
 	if got := consecutiveFailuresOf(t, db, "sgap001-reset"); got != 0 {
