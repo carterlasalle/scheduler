@@ -189,7 +189,7 @@ ALTER TABLE projects ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
 	},
 	{
 		version: 10,
-		desc:    "add duckbrain_sync_dedup table to make DuckBrainSync idempotent (S-GAP-002)",
+		desc:    "add duckbrain_sync_dedup table to make DuckBrainSync idempotent",
 		stmt: `
 CREATE TABLE IF NOT EXISTS duckbrain_sync_dedup (
     mem_key      TEXT PRIMARY KEY,

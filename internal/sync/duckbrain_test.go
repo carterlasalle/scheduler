@@ -756,7 +756,7 @@ func TestRun_StartsAndStops(t *testing.T) {
 	// Project p1's state never changes across ticks, so only the first
 	// cycle should actually POST (fleet summary + project status +
 	// namespace summary = 3); every later tick's identical content must be
-	// deduped, not resent (S-GAP-002 regression guard — before the fix this
+	// deduped, not resent (duckbrain-sync-dedup regression guard — before the fix this
 	// grew unboundedly with every tick).
 	if callCount != 3 {
 		t.Errorf("callCount = %d, want 3 (initial cycle only; later ticks should be deduped)", callCount)

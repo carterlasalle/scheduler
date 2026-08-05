@@ -52,7 +52,7 @@ type DuckBrainSync struct {
 	// re-posting content that hasn't actually changed since the last
 	// successful sync — without this, every cycle re-posted every memory
 	// unconditionally and DuckBrain (no upsert-by-key) grew a duplicate row
-	// per key per cycle forever (S-GAP-002).
+	// per key per cycle forever (duckbrain-sync-dedup).
 	dedupCache map[string]string
 	// pendingDedup buffers newly-synced hashes for the cycle, flushed to
 	// duckbrain_sync_dedup in flushPending once no rows cursor is open
@@ -661,7 +661,7 @@ func (d *DuckBrainSync) bufferSpool(key, domain, content string) {
 // (scheduler + gateway + cron jobs + this reflection process) shares one
 // bucket — a short in-request backoff absorbs a transient shared-bucket
 // burst instead of immediately spooling and waiting a full 5-minute cycle
-// to retry (S-GAP-002).
+// to retry (duckbrain-sync-dedup).
 const maxRateLimitRetries = 2
 
 // rateLimitBackoff is the initial delay before the first 429 retry; it
