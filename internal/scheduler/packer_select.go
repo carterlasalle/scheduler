@@ -105,11 +105,14 @@ func (m *MultiPoolPacker) Pack(
 			)
 			// S-GAP-001 fairness: an eligible project whose last attempt is
 			// older than its starvation window jumps the urgency queue so the
-			// prio-10 cohort cannot starve it indefinitely.
+			// prio-10 cohort cannot starve it indefinitely. The boost is
+			// monotonic in starvation age so the MOST-starved project sorts
+			// first regardless of priority (reopen 2026-08-05).
 			if isStarving(p.CooldownS, p.ConsecutiveFailures, lastTick, createdAt, now) && urgency < starvationBoostUrgency {
-				urgency = starvationBoostUrgency
-				log.Printf("FAIRNESS: %s boosted (cooldown=%ds failures=%d window=%v) — starvation guarantee",
-					p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS))
+				age := starvationAge(lastTick, createdAt, now)
+				urgency = starvationBoostUrgencyFor(age)
+				log.Printf("FAIRNESS: %s boosted (cooldown=%ds failures=%d window=%v starved=%v) — starvation guarantee",
+					p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS), age)
 			}
 
 			effW := CalcEffectiveWeight(p.Weight, totalWeightInNS, alloc)

@@ -103,11 +103,13 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 		}
 		s.urgency = p.calculator.ComputeUrgency(s.priority, s.decayRate, now, lastCompleted, s.createdAt)
 		// S-GAP-001 fairness: starvation boost in the flat path too, or the
-		// two selection paths would diverge.
+		// two selection paths would diverge. Monotonic in starvation age so
+		// the most-starved project sorts first regardless of priority.
 		if isStarving(s.cooldownS, s.consecutiveFailures, lastCompleted, s.createdAt, now) && s.urgency < starvationBoostUrgency {
-			s.urgency = starvationBoostUrgency
-			log.Printf("FAIRNESS: %s boosted in flat packer (cooldown=%ds failures=%d window=%v)",
-				s.name, s.cooldownS, s.consecutiveFailures, StarvationWindow(s.cooldownS))
+			age := starvationAge(lastCompleted, s.createdAt, now)
+			s.urgency = starvationBoostUrgencyFor(age)
+			log.Printf("FAIRNESS: %s boosted in flat packer (cooldown=%ds failures=%d window=%v starved=%v)",
+				s.name, s.cooldownS, s.consecutiveFailures, StarvationWindow(s.cooldownS), age)
 		}
 		s.lastTickAt = lastCompleted
 		list = append(list, s)

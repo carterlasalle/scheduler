@@ -117,11 +117,14 @@ func (m *MultiPoolPacker) packFlat(
 			float64(p.Priority), p.DecayRate, now, lastTick, createdAt,
 		)
 		// S-GAP-001 fairness: starvation boost applies in the flat fallback
-		// too, or the two selection paths would diverge.
+		// too, or the two selection paths would diverge. Monotonic in
+		// starvation age so the most-starved project sorts first regardless
+		// of priority (reopen 2026-08-05).
 		if isStarving(p.CooldownS, p.ConsecutiveFailures, lastTick, createdAt, now) && urgency < starvationBoostUrgency {
-			urgency = starvationBoostUrgency
-			log.Printf("FAIRNESS: %s boosted in flat fallback (cooldown=%ds failures=%d window=%v)",
-				p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS))
+			age := starvationAge(lastTick, createdAt, now)
+			urgency = starvationBoostUrgencyFor(age)
+			log.Printf("FAIRNESS: %s boosted in flat fallback (cooldown=%ds failures=%d window=%v starved=%v)",
+				p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS), age)
 		}
 		list = append(list, scored{proj: *p, urgency: urgency, lastTick: lastTick})
 	}

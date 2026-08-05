@@ -21,6 +21,12 @@ import (
 // Fix B — spawn-failure backoff: consecutive spawn failures multiply the
 // effective cooldown by 2^(failures-1), capped at 2h, making >50 consecutive
 // failures per day impossible.
+//
+// Reopen (2026-08-05): the flat 1e12 boost tied every starving project, so
+// the priority-desc tie-break kept the prio-5 tier at zero spawn attempts
+// for 25-34h live. The boost is now monotonic in starvation age
+// (starvationBoostUrgencyFor) — most-starved first, regardless of priority.
+// The MultiStarved tests below pin that ordering.
 
 // prodUrgencyCalc mirrors the daemon's live urgency calculator
 // (--min-interval 30s, max 24h, 10 levels).
@@ -303,6 +309,124 @@ func TestSGAP001_Backoff_FlatPick(t *testing.T) {
 	}
 	if len(picked) != 1 || picked[0].Name != "flaky" {
 		t.Errorf("flat Pick 2h+ after failure selected %v, want [flaky]", picked)
+	}
+}
+
+// TestSGAP001_MultiStarved_MostStarvedWins_NamespacePack is THE acceptance
+// test for the 2026-08-05 reopen: TWO starved projects of different priority
+// plus a hot prio-10 compete for ONE slot — the MOST-starved project must
+// win regardless of priority. With the original flat boost (1e12 for all)
+// the two starved projects tied and the priority-desc tie-break handed the
+// slot to starved-prio10 — the exact bug that kept the prio-5 tier at zero
+// spawn attempts for 25-34h live.
+func TestSGAP001_MultiStarved_MostStarvedWins_NamespacePack(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	mustCreateNamespace(t, db, makeNamespace("coding-hermes", 10, 1, 100, true))
+	mustCreateProjectInNS(t, db, "hot-prio10", "coding-hermes", 10, 10, 900, 1.0)
+	mustCreateProjectInNS(t, db, "starved-prio10", "coding-hermes", 10, 10, 900, 1.0)
+	mustCreateProjectInNS(t, db, "starved-prio5", "coding-hermes", 10, 5, 900, 1.0)
+
+	projects, err := database.ListProjects(ctx, db, true)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	namespaces, err := database.ListNamespaces(ctx, db, true)
+	if err != nil {
+		t.Fatalf("ListNamespaces: %v", err)
+	}
+
+	now := time.Now().UTC()
+	lastCompleted := map[string]time.Time{
+		"hot-prio10":     now.Add(-16 * time.Minute), // past cooldown, inside window — not starving
+		"starved-prio10": now.Add(-65 * time.Minute), // starving (65min > 60min window)
+		"starved-prio5":  now.Add(-10 * time.Hour),   // starving ~9x longer
+	}
+
+	// One free slot, like the live daemon's freed-slot evaluations.
+	mp := scheduler.NewMultiPoolPacker(100, 1, nil)
+	result := mp.Pack(projects, namespaces, prodUrgencyCalc(), lastCompleted, nil, now)
+
+	got := packNames(result)
+	if len(got) != 1 {
+		t.Fatalf("Pack selected %d projects %v, want exactly 1 (maxConcurrent=1)", len(got), got)
+	}
+	if got[0] != "starved-prio5" {
+		t.Errorf("Pack selected %q, want %q — most-starved project must win the slot "+
+			"regardless of priority (S-GAP-001 reopen regression: flat boost ties let "+
+			"the prio-10 cohort outvote longer-starved prio-5 projects)", got[0], "starved-prio5")
+	}
+}
+
+// TestSGAP001_MultiStarved_OrderingIsAgeNotPriority pins the ordering key
+// among starved projects: a 4-minute age gap (65min vs 61min) is decisive.
+// The older-starved project wins — the sort key among the boosted cohort is
+// starvation age, so any wrong formulation that ignores age (flat boost,
+// priority-weighted boost) reintroduces the tie this test guards.
+func TestSGAP001_MultiStarved_OrderingIsAgeNotPriority(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	mustCreateNamespace(t, db, makeNamespace("coding-hermes", 10, 1, 100, true))
+	mustCreateProjectInNS(t, db, "starved-prio10", "coding-hermes", 10, 10, 900, 1.0)
+	mustCreateProjectInNS(t, db, "starved-prio5", "coding-hermes", 10, 5, 900, 1.0)
+
+	projects, err := database.ListProjects(ctx, db, true)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	namespaces, err := database.ListNamespaces(ctx, db, true)
+	if err != nil {
+		t.Fatalf("ListNamespaces: %v", err)
+	}
+
+	now := time.Now().UTC()
+	lastCompleted := map[string]time.Time{
+		"starved-prio10": now.Add(-65 * time.Minute), // older by 4 minutes
+		"starved-prio5":  now.Add(-61 * time.Minute),
+	}
+
+	mp := scheduler.NewMultiPoolPacker(100, 1, nil)
+	result := mp.Pack(projects, namespaces, prodUrgencyCalc(), lastCompleted, nil, now)
+
+	got := packNames(result)
+	if len(got) != 1 {
+		t.Fatalf("Pack selected %d projects %v, want exactly 1 (maxConcurrent=1)", len(got), got)
+	}
+	if got[0] != "starved-prio10" {
+		t.Errorf("Pack selected %q, want %q — among starved projects the OLDER "+
+			"last attempt (65min > 61min) must decide; ordering is starvation age",
+			got[0], "starved-prio10")
+	}
+}
+
+// TestSGAP001_MultiStarved_MostStarvedWins_FlatPick is the flat-path twin of
+// TestSGAP001_MultiStarved_MostStarvedWins_NamespacePack via the DB-backed
+// Packer.Pick — the age-monotonic boost must hold in both selection paths.
+func TestSGAP001_MultiStarved_MostStarvedWins_FlatPick(t *testing.T) {
+	db := newTestDB(t)
+
+	mustCreateProjectAt(t, db, "hot-prio10", 10, 10, 900, 1.0)
+	mustCreateProjectAt(t, db, "starved-prio10", 10, 10, 900, 1.0)
+	mustCreateProjectAt(t, db, "starved-prio5", 10, 5, 900, 1.0)
+
+	now := time.Now().UTC()
+	setLastCompleted(t, db, "hot-prio10", now.Add(-16*time.Minute))
+	setLastCompleted(t, db, "starved-prio10", now.Add(-65*time.Minute))
+	setLastCompleted(t, db, "starved-prio5", now.Add(-10*time.Hour))
+
+	p := scheduler.NewPacker(db, prodUrgencyCalc(), 100, 1, nil)
+	picked, err := p.Pick(now, nil)
+	if err != nil {
+		t.Fatalf("Pick: %v", err)
+	}
+	if len(picked) != 1 {
+		t.Fatalf("flat Pick selected %d projects, want exactly 1 (maxConcurrent=1)", len(picked))
+	}
+	if picked[0].Name != "starved-prio5" {
+		t.Errorf("flat Pick selected %q, want %q — age-monotonic starvation boost "+
+			"missing in flat path (S-GAP-001 reopen regression)", picked[0].Name, "starved-prio5")
 	}
 }
 
