@@ -415,7 +415,7 @@ func TestAPI_SpawnProject_MethodNotAllowed(t *testing.T) {
 func TestAPI_ProjectByID_MethodNotAllowed(t *testing.T) {
 	a := newAPITestServer(t)
 	mustCreateAPITestProject(t, a.db, "alpha")
-	status, _ := a.do(t, "DELETE", "/api/v1/projects/alpha", nil)
+	status, _ := a.do(t, "PATCH", "/api/v1/projects/alpha", nil)
 	if status != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", status)
 	}

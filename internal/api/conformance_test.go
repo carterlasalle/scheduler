@@ -302,3 +302,140 @@ func TestConformance_WireFormat_Events(t *testing.T) {
 		}
 	}
 }
+
+// --- delete project (DOGFOOD-005) ---
+
+// TestConformance_DeleteProject_NoConfirm verifies DELETE without the
+// confirm=true query param is refused with 400 and an actionable message,
+// and the project is left untouched.
+func TestConformance_DeleteProject_NoConfirm(t *testing.T) {
+	a := newAPITestServer(t)
+	// POST creates a project disabled (create never auto-enables).
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "doomed",
+		"repo_url": "https://example.com/doomed",
+		"workdir":  "/tmp/doomed",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201: %v", status, resp)
+	}
+
+	status, resp = a.do(t, "DELETE", "/api/v1/projects/doomed", nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "confirm=true") {
+		t.Errorf("error = %q, want mention of confirm=true", msg)
+	}
+	// Project still present and untouched.
+	if _, err := database.GetProject(context.Background(), a.db, "doomed"); err != nil {
+		t.Errorf("GetProject after refused delete: %v", err)
+	}
+}
+
+// TestConformance_DeleteProject_EnabledWithoutConfirm verifies the confirm
+// check runs FIRST: an enabled project without confirm gets 400, not 409.
+func TestConformance_DeleteProject_EnabledWithoutConfirm(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha") // enabled
+	status, resp := a.do(t, "DELETE", "/api/v1/projects/alpha", nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (confirm checked before enabled guard): %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "confirm=true") {
+		t.Errorf("error = %q, want mention of confirm=true", msg)
+	}
+	got, err := database.GetProject(context.Background(), a.db, "alpha")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if !got.Enabled {
+		t.Error("project disabled by DELETE without confirm")
+	}
+}
+
+// TestConformance_DeleteProject_EnabledProjectRefused verifies an enabled
+// project is refused with 409 and an actionable pause-first message.
+func TestConformance_DeleteProject_EnabledProjectRefused(t *testing.T) {
+	a := newAPITestServer(t)
+	// Create disabled via POST, then enable through the API resume route.
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "liveproj",
+		"repo_url": "https://example.com/liveproj",
+		"workdir":  "/tmp/liveproj",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201: %v", status, resp)
+	}
+	status, resp = a.do(t, "POST", "/api/v1/projects/liveproj/resume", nil)
+	if status != http.StatusOK {
+		t.Fatalf("resume status = %d, want 200: %v", status, resp)
+	}
+
+	status, resp = a.do(t, "DELETE", "/api/v1/projects/liveproj?confirm=true", nil)
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "pause it first") {
+		t.Errorf("error = %q, want the pause-first guard message", msg)
+	}
+	// Still enabled and intact.
+	got, err := database.GetProject(context.Background(), a.db, "liveproj")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if !got.Enabled {
+		t.Error("project disabled by refused delete")
+	}
+}
+
+// TestConformance_DeleteProject_Success verifies a disabled project is
+// soft-deleted: 200 with the paused-style envelope and Enabled=false
+// afterwards (row retained — GetProject still finds it).
+func TestConformance_DeleteProject_Success(t *testing.T) {
+	a := newAPITestServer(t)
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "testdummy",
+		"repo_url": "https://example.com/testdummy",
+		"workdir":  "/tmp/testdummy",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201: %v", status, resp)
+	}
+
+	status, resp = a.do(t, "DELETE", "/api/v1/projects/testdummy?confirm=true", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %v", status, resp)
+	}
+	if resp["status"] != "deleted" {
+		t.Errorf("status field = %v, want deleted", resp["status"])
+	}
+	if resp["project"] != "testdummy" {
+		t.Errorf("project field = %v, want testdummy", resp["project"])
+	}
+	// Soft delete: row retained, Enabled=false.
+	got, err := database.GetProject(context.Background(), a.db, "testdummy")
+	if err != nil {
+		t.Fatalf("GetProject after delete: %v", err)
+	}
+	if got.Enabled {
+		t.Error("enabled = true, want false after soft delete")
+	}
+}
+
+// TestConformance_DeleteProject_NotFound verifies an unknown project maps
+// to 404 even with confirm=true.
+func TestConformance_DeleteProject_NotFound(t *testing.T) {
+	a := newAPITestServer(t)
+	status, resp := a.do(t, "DELETE", "/api/v1/projects/nope?confirm=true", nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "not found") {
+		t.Errorf("error = %q, want project not found", msg)
+	}
+}

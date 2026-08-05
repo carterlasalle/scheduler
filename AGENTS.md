@@ -72,6 +72,26 @@ internal/
 | `/api/v1/evaluate` | Trigger re-evaluation |
 | `/mcp` | MCP JSON-RPC endpoint |
 
+## Manual Database Operations
+
+The daemon's default DB path is `~/.hermes/coding-hermes/scheduler.db` (`--db` flag; `db_path` in config). For operations the API deliberately guards against, operators can go straight to SQLite:
+
+- **Remove a junk test-dummy project (soft delete, same semantics as the API):**
+
+  ```sh
+  sqlite3 ~/.hermes/coding-hermes/scheduler.db "UPDATE projects SET enabled=0 WHERE name='<name>';"
+  ```
+
+  The row is retained (historical ticks stay referentially valid); the project just stops being scheduled. Prefer the API (`DELETE /api/v1/projects/{name}?confirm=true`) when the daemon is up — it refuses enabled projects with 409. This fallback bypasses that guard, so only use it on projects you are certain are dead weight.
+
+- **Hard-delete (only when the row itself must go, e.g. a typo'd name):**
+
+  ```sh
+  sqlite3 ~/.hermes/coding-hermes/scheduler.db "DELETE FROM projects WHERE name='<name>';"
+  ```
+
+  This can orphan historical ticks — do not use it for normal cleanup.
+
 ## Key Design Decisions
 
 - **No timeout backoff.** Timeout means try again at normal cooldown — do not escalate.

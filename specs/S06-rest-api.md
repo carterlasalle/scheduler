@@ -10,9 +10,9 @@
 
 The scheduler exposes a versioned JSON REST API from the same `net/http` server as the daemon. The default listener is `127.0.0.1:9090`; every route in this specification is rooted at `/api/v1`. The API provides health and fleet status, project registration and configuration, tick and event history, and imperative scheduler controls.
 
-SQLite is authoritative for projects, ticks, and events. Control calls operate on the in-process `scheduler.Loop`. Responses are JSON and use `Content-Type: application/json`. There is no authentication layer, cross-origin API, delete endpoint, offset/cursor pagination, or asynchronous job resource.
+SQLite is authoritative for projects, ticks, and events. Control calls operate on the in-process `scheduler.Loop`. Responses are JSON and use `Content-Type: application/json`. There is no authentication layer, cross-origin API, offset/cursor pagination, or asynchronous job resource. Project removal is a soft delete: `DELETE /projects/{name}?confirm=true` sets `enabled=false` (the row is retained so history stays referentially valid) and refuses enabled projects with `409`.
 
-The implementation registers fifteen `ServeMux` patterns representing twenty method/path operations. This document uses those twenty operations as the public surface. Empty collections are encoded as arrays, never `null`.
+The implementation registers fifteen `ServeMux` patterns representing twenty-one method/path operations. This document uses those twenty-one operations as the public surface. Empty collections are encoded as arrays, never `null`.
 
 ### 1.1 Current implementation conformance
 
@@ -39,6 +39,11 @@ implementation now matches this contract on the full verified surface:
   `400` with an actionable range message; UNIQUE violations map to `409`
   "project already exists"; the case-insensitive dup-workdir guard maps to
   `409` with the guard's message.
+- **Soft delete — ADDED (DOGFOOD-005).** `DELETE /projects/{name}` requires
+  `confirm=true` (else `400`), returns `404` for unknown projects, refuses
+  enabled projects with `409` (pause first), and otherwise soft-deletes by
+  setting `enabled=false` — `200 {"status":"deleted","project":name}`, row
+  retained. Verified by the `TestConformance_DeleteProject_*` tests.
 
 Verified by `internal/api/conformance_test.go` (snake_case + PascalCase
 create/update, 409 duplicate name/workdir, 400 invalid weight, and exact
@@ -163,6 +168,23 @@ paths:
         '404': { $ref: '#/components/responses/ProjectNotFound' }
         '500': { $ref: '#/components/responses/InternalError' }
         '405': { $ref: '#/components/responses/ProjectMethods' }
+    delete:
+      operationId: deleteProject
+      parameters:
+        - $ref: '#/components/parameters/ProjectName'
+        - { name: confirm, in: query, required: true, schema: { type: string }, example: 'true' }
+      responses:
+        '200':
+          description: Project soft-deleted — enabled set to false; row retained so history stays valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectControl' }
+              example: { status: deleted, project: alpha }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/ProjectNotFound' }
+        '409': { $ref: '#/components/responses/ProjectEnabled' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '405': { $ref: '#/components/responses/ProjectMethods' }
   /projects/{name}/pause:
     post:
       operationId: pauseProject
@@ -267,11 +289,12 @@ components:
     ProjectNotFound: { description: Project absent, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: project not found } } } }
     TickNotFound: { description: Tick absent, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: tick not found } } } }
     Conflict: { description: Duplicate project name, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: project already exists } } } }
+    ProjectEnabled: { description: Project exists and is enabled — pause it before deleting, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: 'project is enabled — pause it first before deleting' } } } }
     InternalError: { description: Database/internal failure, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: database failure } } } }
     GetOnly: { description: Wrong method, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: GET only } } } }
     PostOnly: { description: Wrong method, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: POST only } } } }
     GetOrPostOnly: { description: Wrong method, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: GET or POST only } } } }
-    ProjectMethods: { description: Wrong method, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: 'GET, PUT, or POST only' } } } }
+    ProjectMethods: { description: Wrong method, content: { application/json: { schema: { $ref: '#/components/schemas/Error' }, example: { error: 'GET, PUT, POST, or DELETE only' } } } }
   schemas:
     Error: { type: object, required: [error], additionalProperties: false, properties: { error: { type: string } } }
     Health: { type: object, required: [status, uptime, db, active_ticks], properties: { status: { type: string, enum: [ok] }, uptime: { type: string }, db: { type: string, description: 'connected or error: <driver error>' }, active_ticks: { type: integer } } }
@@ -291,7 +314,7 @@ components:
       properties: { repo_url: { type: string }, workdir: { type: string }, weight: { type: integer }, priority: { type: integer }, cooldown_s: { type: integer }, decay_rate: { type: number }, model: { type: string }, provider: { type: string }, enabled: { type: boolean } }
     ProjectList: { type: object, required: [projects], properties: { projects: { type: array, items: { $ref: '#/components/schemas/Project' } } } }
     ProjectDetail: { type: object, required: [project, latest_tick], properties: { project: { $ref: '#/components/schemas/Project' }, latest_tick: { nullable: true, allOf: [{ $ref: '#/components/schemas/Tick' }] } } }
-    ProjectControl: { type: object, required: [status, project], properties: { status: { type: string, enum: [paused, resumed] }, project: { type: string } } }
+    ProjectControl: { type: object, required: [status, project], properties: { status: { type: string, enum: [paused, resumed, deleted] }, project: { type: string } } }
     Tick:
       type: object
       required: [id, project_name, session_id, status, outcome, spawned_at, completed_at, exit_code, commits, files_changed, tokens_in, tokens_out, cost_usd, urgency, weight_used, error, created_at]
@@ -331,6 +354,8 @@ Health is deliberately liveness-oriented: a failed ping still returns HTTP `200`
 ### 4.4 Route dispatch and controls
 
 `handleProjectByID` must trim `/api/v1/projects/`, split the remaining relative path, and interpret one segment as `{name}` and two as `{name}/pause|resume`. Unknown two-segment POST sub-routes return `404 {"error":"not found"}`. Other wrong methods return `405`.
+
+`DELETE /projects/{name}` is a soft delete: it requires `confirm=true` (else `400`), returns `404` for unknown projects, refuses enabled projects with `409` (pause first), and otherwise sets `enabled=false` via `database.DeleteProject`, returning `200 {"status":"deleted","project":name}`. The row is retained so historical ticks stay referentially valid.
 
 Project pause/resume performs `UpdateProject(enabled=false|true)`. In the current handlers a missing project is surfaced as `500`, unlike get/update which translate it to `404`. Fleet controls are synchronous in-memory calls: `ForceEvaluate`, `Pause`, and `Resume`; success means the method was invoked, not that a tick completed or persisted.
 
@@ -390,14 +415,16 @@ Every explicit handler error is newline-terminated JSON with `Content-Type: appl
 | `400` | `name, repo_url, workdir are required` | Create omits/empties a required field |
 | `400` | `project name required` | Project-by-ID dispatch has no relative name |
 | `400` | `tick id required` | Tick-by-ID suffix is empty |
-| `404` | `project not found` | Project GET/PUT targets an absent row |
+| `400` | `confirm=true query param required — this soft-deletes the project (enabled=false)` | DELETE project omits the confirm flag |
+| `404` | `project not found` | Project GET/PUT/DELETE targets an absent row |
 | `404` | `tick not found` | Tick lookup returns any query/scan error |
 | `404` | `not found` | Unknown project POST sub-route |
 | `405` | `GET only` | Non-GET health, status, ticks, tick detail, or events |
 | `405` | `POST only` | Non-POST evaluate, fleet pause, or fleet resume |
 | `405` | `GET or POST only` | Unsupported method on `/projects` |
-| `405` | `GET, PUT, or POST only` | Unsupported method on project-by-ID dispatch |
+| `405` | `GET, PUT, POST, or DELETE only` | Unsupported method on project-by-ID dispatch |
 | `409` | `project already exists` | Create error text contains `UNIQUE constraint` |
+| `409` | `project is enabled — pause it first (PUT Enabled=false or POST /projects/{name}/pause) before deleting` | DELETE targets an enabled project |
 | `500` | database error text | List/get/update/create/history query fails |
 | `500` | update error text | Project pause/resume targets a missing row or fails |
 
@@ -410,7 +437,7 @@ Unregistered paths receive Go ServeMux's default plain-text `404 page not found`
 Use `httptest.NewServer` or `httptest.NewRecorder`, a temporary SQLite database initialized by migrations, and a real `scheduler.Loop` with no background run. Tests must not bind the production port or spawn Hermes.
 
 ```text
-1. Assert all fourteen method/path operations and exact success status/body.
+1. Assert all twenty-one method/path operations and exact success status/body.
 2. Assert every response and explicit error has application/json.
 3. Create, list, get, partial-update, pause, and resume a project.
 4. Verify duplicate create is 409 and malformed/missing fields are 400.

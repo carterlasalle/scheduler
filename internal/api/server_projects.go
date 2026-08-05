@@ -128,8 +128,10 @@ func (s *Server) handleProjectByID(w http.ResponseWriter, r *http.Request) {
 		s.getProject(w, r, name)
 	case http.MethodPut:
 		s.updateProject(w, r, name)
+	case http.MethodDelete:
+		s.deleteProject(w, r, name)
 	default:
-		writeError(w, 405, "GET, PUT, or POST only")
+		writeError(w, 405, "GET, PUT, POST, or DELETE only")
 	}
 }
 
@@ -195,6 +197,40 @@ func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request, name stri
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "resumed", "project": name})
+}
+
+// deleteProject soft-deletes a project (sets enabled=false; the row is
+// retained so historical ticks stay referentially valid). It requires an
+// explicit confirm=true query param and refuses enabled projects so a live
+// fleet project can never be silently disabled by a stray DELETE.
+func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request, name string) {
+	// Confirm flag checked first: even a valid, enabled project must not be
+	// touched without explicit confirmation.
+	if r.URL.Query().Get("confirm") != "true" {
+		writeError(w, 400, "confirm=true query param required — this soft-deletes the project (enabled=false)")
+		return
+	}
+	ctx := context.Background()
+	p, err := database.GetProject(ctx, s.db, name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, 404, "project not found")
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	// Enabled-project guard: deleting a live project would silently starve
+	// it of ticks — require an explicit pause first.
+	if p.Enabled {
+		writeError(w, 409, "project is enabled — pause it first (PUT Enabled=false or POST /projects/{name}/pause) before deleting")
+		return
+	}
+	if err := database.DeleteProject(ctx, s.db, name); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "deleted", "project": name})
 }
 
 // spawnProject handles POST /api/v1/projects/:name/spawn.

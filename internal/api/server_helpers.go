@@ -271,6 +271,19 @@ var openapiSpec = []byte(`{
         "responses": {
           "200": {"description": "Updated project"}
         }
+      },
+      "delete": {
+        "summary": "Soft-delete a project (sets enabled=false; requires ?confirm=true; refuses enabled projects)",
+        "parameters": [
+          {"name": "name", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "confirm", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Project soft-deleted (enabled=false)"},
+          "400": {"description": "Missing confirm=true query param"},
+          "404": {"description": "Project not found"},
+          "409": {"description": "Project is enabled — pause it first"}
+        }
       }
     },
     "/api/v1/projects/{name}/spawn": {
