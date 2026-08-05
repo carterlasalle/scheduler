@@ -561,3 +561,30 @@ tasks:
   status: complete
   created_at: '2026-08-04T21:22:33.413439+00:00'
   completed_at: '2026-08-04T21:22:39.748851+00:00'
+- id: S-GAP-001
+  title: Scheduler selection starvation + spawn-failure backoff
+  criteria:
+  - 'internal/scheduler/fairness.go defines a starvation window: cooldown<=3600s projects
+    get window 3600s, cooldown>3600s get 3x cooldown; boost only applies when cooldown
+    passed, project not running, and now-last_tick_started > window'
+  - internal/scheduler/packer_select.go MultiPoolPacker.Pack and internal/scheduler/packer.go
+    packFlat BOTH apply the starvation guarantee before/within greedy urgency packing
+    (both pack paths covered)
+  - 'internal/scheduler/fairness.go FailureBackoff: effective cooldown = base * 2^(consecutive_failures-1)
+    capped at 7200s for base<=3600s projects; cooldown>3600s never sped up; applied
+    in both pack paths'
+  - internal/scheduler/spawn.go increments consecutive_failures on gateway spawn failure
+    and resets to 0 on successful spawn
+  - internal/database/migrations.go adds consecutive_failures INT NOT NULL DEFAULT
+    0 column via the existing migration mechanism; internal/database/models.go + projects.go
+    read/write it
+  - 'Regression tests exist and pass: TestSGAP001_Starvation_NamespacePack, TestSGAP001_StarvationBoundary
+    (59min NOT boosted), TestSGAP001_Backoff_NamespacePack, TestSGAP001_Starvation_FlatPick,
+    TestSGAP001_Backoff_FlatPick, TestSGAP001_ConsecutiveFailuresRoundTrip, TestSpawn_GatewayFailureIncrementsConsecutiveFailures,
+    TestSpawn_GatewaySuccessResetsConsecutiveFailures'
+  - 'Full gate ladder passes at commit 8f763b9: go build, go vet, gofmt clean, go
+    test -short -p 1 -count=1 ./... all packages ok, golangci-lint 0 issues, gitreins
+    guard PASS 4/4'
+  status: complete
+  created_at: '2026-08-05T00:28:32.903001+00:00'
+  completed_at: '2026-08-05T00:31:03.751198+00:00'
