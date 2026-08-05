@@ -74,6 +74,7 @@ enabled = true
 	ns := findNamespace(cfg, "coding-hermes")
 	if ns == nil {
 		t.Fatal("namespace coding-hermes not found")
+		return
 	}
 	if ns.Weight != 70 {
 		t.Errorf("namespace weight: expected 70, got %d", ns.Weight)
@@ -92,6 +93,7 @@ enabled = true
 	p := findProject(cfg, "helix")
 	if p == nil {
 		t.Fatal("project helix not found")
+		return
 	}
 	if p.RepoURL != "https://github.com/totalwindupflightsystems/helix" {
 		t.Errorf("project repo_url mismatch: %q", p.RepoURL)
@@ -346,6 +348,7 @@ enabled = false
 	p := findProject(cfg, "disabled-proj")
 	if p == nil {
 		t.Fatal("project disabled-proj not found")
+		return
 	}
 	if p.Enabled == nil || *p.Enabled {
 		t.Error("project enabled should be false")
