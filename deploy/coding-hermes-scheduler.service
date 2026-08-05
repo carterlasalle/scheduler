@@ -1,31 +1,26 @@
 [Unit]
 Description=Coding Hermes Fleet Scheduler
-After=network.target hermes-gateway.service
+After=network.target
 
 [Service]
 Type=simple
-User=kara
+User=hermes
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=30
-ExecStartPre=-/usr/bin/pkill -f "hermes.*foreman"
-ExecStartPre=-/usr/bin/pkill -f "duckbrain"
-ExecStart=/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd \
-  -db /home/kara/.hermes/coding-hermes/scheduler.db \
+ExecStart=/home/hermes/coding-herms-scheduler/bin/schedulerd \
+  -db /home/hermes/.hermes/coding-hermes/scheduler.db \
+  -config /home/hermes/coding-herms-scheduler/fleet.toml \
   -listen 127.0.0.1:9090 \
-  --namespace-mode \
-  --max-concurrent 10 \
-  --min-interval 30s \
-  --tick-timeout 600s \
-  --gateway-url=http://127.0.0.1:8642
+  -gateway-url= \
+  -max-concurrent 5 \
+  -min-interval 30s \
+  -tick-timeout 600s
 Restart=on-failure
 RestartSec=30
 MemoryMax=8G
 StandardOutput=journal
 StandardError=journal
-Environment=HOME=/home/kara
-Environment=PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin
-Environment=API_SERVER_KEY=WZJhtlvVMXfW6ydE2hJgVyJpi6TBYN91fZ22vldTqzE
 
 [Install]
 WantedBy=default.target
