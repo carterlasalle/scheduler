@@ -49,6 +49,11 @@ type Spawner struct {
 	gateway        *GatewayClient // HTTP API client (nil = use exec.Command)
 	noExecFallback bool           // disable exec.Command fallback on gateway failure
 
+	// heartbeatInterval is the cadence at which a running tick's row gets its
+	// heartbeat_at refreshed (S-GAP-003). The gateway zombie reaper treats a
+	// pid=0 row whose heartbeat is stale as orphaned. Tests shrink this.
+	heartbeatInterval time.Duration
+
 	// Prometheus-style spawn counters since last restart.
 	spawnCountHTTP int64
 	spawnCountExec int64
@@ -61,14 +66,15 @@ func NewSpawner(db *sql.DB, maxConcurrent int, timeout ...time.Duration) *Spawne
 		to = timeout[0]
 	}
 	return &Spawner{
-		db:            db,
-		maxConcurrent: maxConcurrent,
-		active:        make(map[string]*exec.Cmd),
-		timeout:       to,
-		model:         getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "your-model-name"),
-		provider:      getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "your-provider-name"),
-		skills:        getEnvOrDefault("SCHEDULER_FOREMAN_SKILLS", "coding-hermes-foreman"),
-		foremanHome:   os.ExpandEnv("$HOME/.hermes/foreman"),
+		db:                db,
+		maxConcurrent:     maxConcurrent,
+		active:            make(map[string]*exec.Cmd),
+		timeout:           to,
+		model:             getEnvOrDefault("SCHEDULER_FOREMAN_MODEL", "your-model-name"),
+		provider:          getEnvOrDefault("SCHEDULER_FOREMAN_PROVIDER", "your-provider-name"),
+		skills:            getEnvOrDefault("SCHEDULER_FOREMAN_SKILLS", "coding-hermes-foreman"),
+		foremanHome:       os.ExpandEnv("$HOME/.hermes/foreman"),
+		heartbeatInterval: 5 * time.Minute,
 	}
 }
 
@@ -142,6 +148,41 @@ func (s *Spawner) ActiveCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.active)
+}
+
+// startHeartbeat launches a goroutine that refreshes the tick row's
+// heartbeat_at every heartbeatInterval until the returned channel is closed.
+// S-GAP-003: heartbeat_at is the liveness signal for pid=0 (gateway) ticks —
+// both zombie reapers treat a heartbeat older than gatewayZombieMaxAge as an
+// orphaned tick. The goroutine never outlives its request/process: callers
+// close the stop channel as soon as the spawn returns. A DB error is logged
+// and the goroutine keeps beating (a transient error must not kill liveness).
+func (s *Spawner) startHeartbeat(tickID string) chan<- struct{} {
+	stop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(s.heartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+			}
+			// A stop that raced with this tick wins — never write after the
+			// spawn returned. At most one in-flight write can land after
+			// close, and the next loop iteration exits immediately.
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := s.db.Exec(`UPDATE ticks SET heartbeat_at = ? WHERE id = ?`,
+				time.Now().Format(time.RFC3339), tickID); err != nil {
+				log.Printf("WARN: heartbeat refresh for tick %s: %v", tickID, err)
+			}
+		}
+	}()
+	return stop
 }
 
 // WorkerDefaults returns a prompt suffix with the project's preferred worker
@@ -219,10 +260,29 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		// Try HTTP gateway spawn first (zero process overhead).
 		if s.gateway != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+
+			// S-GAP-003: the gateway call below is synchronous and blocks for
+			// the whole tick (up to --tick-timeout). Persist a placeholder
+			// session id + first heartbeat BEFORE it starts, so the tick row
+			// never sits 'running' with session_id NULL (the zombie
+			// signature). The placeholder is the tick's own id — unique and
+			// self-describing; the real gateway session id replaces it on
+			// success below.
+			if _, err := s.db.Exec(`UPDATE ticks SET session_id = ?, heartbeat_at = ? WHERE id = ?`,
+				tickID, time.Now().Format(time.RFC3339), tickID); err != nil {
+				log.Printf("WARN: placeholder session_id/heartbeat for %s: %v", tickID, err)
+			}
+			stopHeartbeat := s.startHeartbeat(tickID)
+
 			// Per-foreman gateway key: project.GatewayKey when set, else the
 			// daemon's shared --gateway-key (Bane 2026-07-31).
-			resp, gwErr := s.gateway.SendResponse(ctx, prompt, model, project.GatewayKey)
-			cancel()
+			resp, gwErr := func() (*Response, error) {
+				// The heartbeat goroutine must never outlive the request —
+				// stop it on every return path (success AND failure).
+				defer close(stopHeartbeat)
+				defer cancel()
+				return s.gateway.SendResponse(ctx, prompt, model, project.GatewayKey)
+			}()
 			if gwErr == nil && resp != nil {
 				atomic.AddInt64(&s.spawnCountHTTP, 1)
 				text := resp.ExtractText()
@@ -237,12 +297,19 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				_, _ = s.db.Exec(`UPDATE projects SET last_tick_started = ?, consecutive_failures = 0 WHERE name = ?`,
 					now.Format(time.RFC3339), project.Name)
 
+				// S-GAP-003: persist the REAL gateway session id (resp.ID);
+				// fall back to the placeholder tick id when the gateway
+				// returns none, so the row never goes back to NULL.
+				sessionID := resp.ID
+				if sessionID == "" {
+					sessionID = tickID
+				}
 				log.Printf("GATEWAY: %s tick=%s tokens=%d/%d",
 					project.Name, tickID, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 				return &SpawnedTick{
 					TickID:     tickID,
 					Project:    project.Name,
-					SessionID:  "gateway",
+					SessionID:  sessionID,
 					Started:    now,
 					Deliver:    project.Deliver,
 					Output:     *bytes.NewBufferString(text),
@@ -319,6 +386,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		stderr:  stderr,
 		spawner: s,
 	}
+	// S-GAP-003: keep the tick row's heartbeat fresh for the life of the
+	// process; Wait() stops the goroutine. The gateway branch above runs the
+	// same heartbeat around its blocking request.
+	st.stopHeartbeat = s.startHeartbeat(tickID)
 
 	// Tee stdout: scanner reads session_id from one side, buffer captures full output.
 	teeReader := io.TeeReader(stdout, &st.Output)
@@ -365,10 +436,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	}()
 
 	// Update tick to running with PID for zombie detection.
+	// S-GAP-003: also stamp session_id (placeholder = tick id — the stdout
+	// scanner above overwrites it with the real parsed session id when a
+	// "session_id:" line appears) and the first heartbeat, so no running row
+	// ever has NULL session_id and the reapers always have a liveness signal.
 	_, err = s.db.Exec(`
-		UPDATE ticks SET status = 'running', spawned_at = ?, pid = ?
+		UPDATE ticks SET status = 'running', spawned_at = ?, pid = ?, session_id = ?, heartbeat_at = ?
 		WHERE id = ?
-	`, st.Started.Format(time.RFC3339), st.PID, tickID)
+	`, st.Started.Format(time.RFC3339), st.PID, tickID, st.Started.Format(time.RFC3339), tickID)
 	if err != nil {
 		log.Printf("ERROR updating tick %s to running: %v", tickID, err)
 	}
@@ -398,6 +473,11 @@ type SpawnedTick struct {
 	scanCancel context.CancelFunc
 	mu         sync.Mutex
 
+	// stopHeartbeat is closed by Wait() to stop the tick-row heartbeat
+	// goroutine started in Spawn() (S-GAP-003). Nil for gateway spawns —
+	// their heartbeat is stopped inside Spawn() when the request returns.
+	stopHeartbeat chan<- struct{}
+
 	// completed is true for gateway-spawned ticks that finished in Spawn().
 	completed  bool
 	completeAt time.Time
@@ -407,6 +487,13 @@ type SpawnedTick struct {
 // For gateway-completed ticks (HTTP spawn), returns immediately.
 func (st *SpawnedTick) Wait() TickOutcome {
 	defer func() {
+		// S-GAP-003: stop the tick-row heartbeat goroutine started in Spawn()
+		// — it must never outlive the process. Nil for gateway spawns (their
+		// heartbeat was stopped inside Spawn() when the request returned).
+		if st.stopHeartbeat != nil {
+			close(st.stopHeartbeat)
+			st.stopHeartbeat = nil
+		}
 		st.spawner.mu.Lock()
 		delete(st.spawner.active, st.TickID)
 		st.spawner.mu.Unlock()

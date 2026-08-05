@@ -70,8 +70,8 @@ func TestSpawn_ForwardsPerForemanGatewayKey(t *testing.T) {
 	if outcome.Status != TickCompleted {
 		t.Errorf("Wait() status = %s, want %s", outcome.Status, TickCompleted)
 	}
-	if tick.SessionID != "gateway" {
-		t.Errorf("SessionID = %q, want 'gateway'", tick.SessionID)
+	if tick.SessionID != "resp_gap001" {
+		t.Errorf("SessionID = %q, want real gateway response id 'resp_gap001' (S-GAP-003: no more hardcoded 'gateway')", tick.SessionID)
 	}
 	httpCount, execCount := spawner.SpawnMethodCounts()
 	if httpCount != 1 || execCount != 0 {

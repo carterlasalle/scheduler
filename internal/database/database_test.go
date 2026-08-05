@@ -89,6 +89,48 @@ func TestMigrate_Idempotent(t *testing.T) {
 	}
 }
 
+// TestMigrate_TicksHeartbeatColumn pins migration v10 (S-GAP-003): the ticks
+// table must gain heartbeat_at so gateway-spawn (pid=0) rows have a liveness
+// signal the zombie reapers can check.
+func TestMigrate_TicksHeartbeatColumn(t *testing.T) {
+	db := newTestDB(t)
+
+	var n int
+	if err := db.QueryRow(
+		`SELECT count(*) FROM pragma_table_info('ticks') WHERE name = 'heartbeat_at'`,
+	).Scan(&n); err != nil {
+		t.Fatalf("pragma_table_info(ticks): %v", err)
+	}
+	if n != 1 {
+		t.Errorf("ticks.heartbeat_at missing after Migrate (count=%d) — migration v10 not applied", n)
+	}
+
+	// The column must be usable for both write and julianday() comparison
+	// (the reaper query shape).
+	if _, err := db.Exec(
+		`INSERT INTO projects (name, repo_url, workdir, created_at, updated_at)
+		 VALUES ('sgap003-mig', 'https://example.com/sgap003-mig', '/tmp/sgap003-mig', '2026-08-05T00:00:00Z', '2026-08-05T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO ticks (id, project_name, status, spawned_at, created_at, heartbeat_at)
+		 VALUES ('sgap003-mig-t1', 'sgap003-mig', 'running', '2026-08-05T00:00:00Z', '2026-08-05T00:00:00Z', '2026-08-05T00:10:00Z')`,
+	); err != nil {
+		t.Fatalf("insert tick with heartbeat_at: %v", err)
+	}
+	var stale int
+	if err := db.QueryRow(
+		`SELECT count(*) FROM ticks WHERE id = 'sgap003-mig-t1'
+		 AND julianday(heartbeat_at) < julianday('now', '-15 minutes')`,
+	).Scan(&stale); err != nil {
+		t.Fatalf("julianday heartbeat comparison: %v", err)
+	}
+	if stale != 1 {
+		t.Errorf("julianday(heartbeat_at) comparison matched %d rows, want 1 (RFC3339 must parse)", stale)
+	}
+}
+
 func TestInitDB_WALAndForeignKeys(t *testing.T) {
 	// In-memory databases cannot use WAL mode — SQLite keeps "memory" mode
 	// for them. To verify WAL is actually applied, test with a temp file.
