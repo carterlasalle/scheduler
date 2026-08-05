@@ -586,9 +586,32 @@ tasks:
   - 'Full gate ladder passes at commit 8f763b9: go build, go vet, gofmt clean, go
     test -short -p 1 -count=1 ./... all packages ok, golangci-lint 0 issues, gitreins
     guard PASS 4/4'
-  status: complete
+  - 'REOPEN 2026-08-05 (PM review): starvation boost ordering must be starvation-age
+    first, priority second. Live proof of the residual bug: dexdat-core/imhotep/mythos/
+    rethinkdb/eduos.dexdat.com.co (all priority=5, cooldown<=3600s) get FAIRNESS-boosted
+    every eval yet received ZERO spawn attempts for 25-34h (last ticks: dexdat-core
+    2026-08-04T00:49, imhotep/rethinkdb/eduos 2026-08-03T22:43, mythos 2026-08-03T23:54;
+    my-project/off-by-one silent ~23h) while prio-10 projects fill all 6 slots. Cause:
+    all starved projects share the flat 1e12 boost, so the urgency-desc/priority-desc
+    sort tie-break lets the prio-10 starved cohort win every slot. Fix: make the boosted
+    urgency monotonic in starvation age (e.g. starvationBoostUrgency + elapsed since
+    last attempt, still far above any organic urgency ~12k) in BOTH packer paths
+    (internal/scheduler/packer_select.go MultiPoolPacker.Pack AND internal/scheduler/packer.go
+    packFlat) so the MOST starved project sorts first regardless of priority. Verify:
+    60-min window shows >=1 spawn attempt for ALL enabled cooldown<=3600 projects
+    (live daemon check after restart).'
+  - 'New regression tests exist and pass: (1) starved prio-5 (last attempt 10h ago)
+    MUST beat starved prio-10 (last attempt 65min ago) for a single free slot — the
+    exact live fleet shape; (2) starved prio-10 (65min) still beats starved prio-5
+    (61min) — ordering is starvation age, not priority; (3) flat-path twin of (1) in
+    packFlat. All prior TestSGAP001_* tests keep passing unchanged.'
+  - 'Full gate ladder passes at the extension commit: go build, go vet, gofmt clean,
+    go test -short -p 1 -count=1 -timeout 120s ./... all 9 packages ok, golangci-lint
+    0 issues, gitreins guard PASS 4/4, bin/schedulerd rebuilt, commit has Co-authored-by:
+    Alexis Okuwa trailer.'
+  status: pending
   created_at: '2026-08-05T00:28:32.903001+00:00'
-  completed_at: '2026-08-05T00:31:03.751198+00:00'
+  completed_at: null
 - id: S-GAP-002
   title: Go toolchain go1.26.0 stdlib vulnerabilities (17 called, govulncheck)
   criteria:
@@ -603,5 +626,6 @@ tasks:
   - golangci-lint run reports 0 issues; gitreins guard PASS 4/4 (secrets/go_build/go_lint/go_tests)
   - bin/schedulerd rebuilt with the patched toolchain (daemon restart activates it)
   - 'commit has Co-authored-by: Alexis Okuwa trailer'
-  status: pending
+  status: complete
   created_at: '2026-08-05T06:28:26.672042+00:00'
+  completed_at: '2026-08-05T08:25:02.529480+00:00'
