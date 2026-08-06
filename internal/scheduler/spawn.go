@@ -321,16 +321,22 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 	s.mu.Unlock()
 
 	st := &SpawnedTick{
-		TickID:  tickID,
-		Project: project.Name,
-		PID:     cmd.Process.Pid,
-		Started: time.Now(),
-		Deliver: project.Deliver,
-		cmd:     cmd,
-		stdout:  stdout,
-		stderr:  stderr,
-		spawner: s,
+		TickID:     tickID,
+		Project:    project.Name,
+		PID:        cmd.Process.Pid,
+		Started:    time.Now(),
+		Deliver:    project.Deliver,
+		cmd:        cmd,
+		stdout:     stdout,
+		stderr:     stderr,
+		spawner:    s,
+		preHead:    "",
+		preCommits: -1,
 	}
+
+	// Snapshot the repo at spawn so the completion path can count commits and
+	// files the foreman added during this tick.
+	st.preHead, st.preCommits = gitBaseline(project.Workdir)
 
 	// Tee stdout: scanner reads session_id from one side, buffer captures full output.
 	teeReader := io.TeeReader(stdout, &st.Output)
@@ -410,6 +416,12 @@ type SpawnedTick struct {
 	scanCancel context.CancelFunc
 	mu         sync.Mutex
 
+	// Git baseline captured at spawn (exec path only) so Wait() can measure
+	// the commits/files the foreman produced during this tick. preCommits < 0
+	// means the workdir was not a usable git repo at spawn.
+	preHead    string
+	preCommits int
+
 	// completed is true for gateway-spawned ticks that finished in Spawn().
 	completed  bool
 	completeAt time.Time
@@ -486,6 +498,12 @@ func (st *SpawnedTick) Wait() TickOutcome {
 		outcome.TokensIn = tin
 		outcome.TokensOut = tout
 		outcome.CostUSD = cost
+		// Measure real git work the foreman produced this tick (exec path only —
+		// gateway spawns have no process/repo baseline). Best-effort: a non-git
+		// or unreadable workdir leaves commits/files at 0.
+		if st.preCommits >= 0 && st.cmd != nil && st.cmd.Dir != "" {
+			outcome.Commits, outcome.FilesChanged = gitWorkDelta(st.cmd.Dir, st.preHead, st.preCommits)
+		}
 	}
 
 	log.Printf("TICK: %s %s → %s (%v)", st.Project, st.TickID, outcome.Status, outcome.Duration.Round(time.Second))
