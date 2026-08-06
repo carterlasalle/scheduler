@@ -687,3 +687,44 @@ tasks:
   status: complete
   created_at: '2026-08-06T19:49:57.958396+00:00'
   completed_at: '2026-08-06T20:06:27.062487+00:00'
+- id: S-GAP-007
+  title: 'S-GAP-007: /api/v1/status p99 exceeds spec S10 <100ms at production row
+    counts'
+  criteria:
+  - New index on ticks(completed_at) added in internal/database/migrations.go (CREATE
+    INDEX IF NOT EXISTS, idempotent)
+  - 'countRecentOutcomes semantics unchanged: still counts all ticks with completed_at
+    NOT NULL grouped by status (lifetime numbers)'
+  - --test-verify perf audit shows GET /api/v1/status p99 under 100ms at production
+    row counts (BEFORE/AFTER evidence)
+  - go build ./... and go vet ./... clean; gofmt clean on touched files
+  - go test -short -p 1 -count=1 -timeout 120s ./... passes 9/9 packages
+  - gitreins guard 4/4 PASS before commit; commit carries Co-authored-by trailer;
+    pushed to origin/main
+  status: complete
+  created_at: '2026-08-06T21:02:01.360370+00:00'
+  completed_at: '2026-08-06T21:22:15.254268+00:00'
+- id: S-GAP-006
+  title: 'S-GAP-006: CI workflows not triggering on push since 2026-08-05T17:54Z'
+  criteria:
+  - 'Root cause documented: why no workflow runs for 29611ce/abeecb2 and why new runs
+    fail with hosted-runner acquisition error'
+  - 'CI trigger path verified: a push to main creates workflow runs again, or documented
+    GitHub-side reason for remaining failures'
+  - 'Repo-side config verified sound: Actions enabled, allowed_actions all, workflows
+    unchanged since Aug 1, no workflow-file edits in git log'
+  - Board event documents the finding
+  status: pending
+  created_at: '2026-08-06T21:02:05.883246+00:00'
+- id: S-GAP-008
+  title: 'S-GAP-008: eduos-e2e dominates scheduler failure cluster'
+  criteria:
+  - 'eduos-e2e failure cluster root-caused from live scheduler DB: project row state,
+    tick error patterns, recency of failures'
+  - eduos-e2e either fixed (recent outcomes non-100% failed) or disabled/removed via
+    API; no zombie re-creation path in fleet.toml or daemon config
+  - 'Failure share impact documented: eduos-e2e contribution to recent_outcomes failures
+    after resolution'
+  - Board event documents the finding
+  status: pending
+  created_at: '2026-08-06T21:02:06.070635+00:00'
