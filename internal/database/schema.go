@@ -31,12 +31,29 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		"PRAGMA foreign_keys=ON",
 		"PRAGMA busy_timeout=5000",
 		"PRAGMA synchronous=NORMAL",
+		// DOGFOOD-006: bound WAL checkpoints. SQLite's default
+		// wal_autocheckpoint is 1000 pages (~4MB); on the single shared
+		// connection, the commit that crosses the threshold runs the whole
+		// checkpoint synchronously and every queued read stalls behind it
+		// (13s-class spikes on GET /api/v1/projects under tick load).
+		// 200 pages (~800KB) keeps each crossing checkpoint small.
+		"PRAGMA wal_autocheckpoint=200",
 	}
 	for _, p := range pragmas {
 		if _, err := db.Exec(p); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("pragma %q: %w", p, err)
 		}
+	}
+
+	// Compact any WAL left over from a previous run (e.g. after a crash)
+	// before serving traffic, so the first checkpoint after boot is small
+	// instead of a full multi-MB replay on the request path. TRUNCATE blocks
+	// until done — at boot with a single connection there is no contention —
+	// and fully resets the WAL file to zero bytes (PASSIVE does not).
+	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("startup checkpoint: %w", err)
 	}
 
 	if err := Migrate(context.Background(), db); err != nil {
