@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -140,6 +141,97 @@ func TestPostMemory_NetworkError(t *testing.T) {
 	err = s.postMemory(ctx, "/key", "config", "val")
 	if err == nil {
 		t.Fatal("expected network error, got nil")
+	}
+}
+
+func TestPostMemory_ChangeDetection(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	var posts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	s := NewDuckBrainSync(db, "test-ns", srv.URL)
+	ctx := context.Background()
+
+	status := projectStatus{
+		Name: "p1", Weight: 10, Priority: 5, Enabled: true,
+		CooldownS: 900, DecayRate: 1.0, Model: "m", Provider: "p",
+		LastTick: "2026-08-01T00:00:00Z", LastTickStart: "2026-08-01T00:00:00Z",
+		SyncedAt: "2026-08-05T18:00:00Z",
+	}
+
+	// First post always goes through.
+	if err := s.postMemory(ctx, "/fleet/projects/p1/status", "config", status); err != nil {
+		t.Fatalf("first postMemory: %v", err)
+	}
+	if got := posts.Load(); got != 1 {
+		t.Fatalf("posts after first = %d, want 1", got)
+	}
+
+	// Same payload with only synced_at changed → SKIPPED (no POST).
+	status.SyncedAt = "2026-08-05T18:05:00Z"
+	if err := s.postMemory(ctx, "/fleet/projects/p1/status", "config", status); err != nil {
+		t.Fatalf("unchanged postMemory: %v", err)
+	}
+	if got := posts.Load(); got != 1 {
+		t.Fatalf("posts after unchanged retry = %d, want 1 (dedupe failed)", got)
+	}
+
+	// A real field change → posted again.
+	status.CooldownS = 7200
+	if err := s.postMemory(ctx, "/fleet/projects/p1/status", "config", status); err != nil {
+		t.Fatalf("changed postMemory: %v", err)
+	}
+	if got := posts.Load(); got != 2 {
+		t.Fatalf("posts after changed payload = %d, want 2", got)
+	}
+}
+
+func TestPostMemory_FailureNotCached(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	var posts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if posts.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"boom"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	s := NewDuckBrainSync(db, "test-ns", srv.URL)
+	ctx := context.Background()
+
+	status := projectStatus{
+		Name: "p1", Weight: 10, Priority: 5, Enabled: true,
+		CooldownS: 900, DecayRate: 1.0, Model: "m", Provider: "p",
+		SyncedAt: "2026-08-05T18:00:00Z",
+	}
+
+	// First attempt fails — must NOT be recorded as synced.
+	if err := s.postMemory(ctx, "/fleet/projects/p1/status", "config", status); err == nil {
+		t.Fatal("expected error on first (500) post, got nil")
+	}
+	// Identical payload retried after failure → must POST again.
+	if err := s.postMemory(ctx, "/fleet/projects/p1/status", "config", status); err != nil {
+		t.Fatalf("retry postMemory: %v", err)
+	}
+	if got := posts.Load(); got != 2 {
+		t.Fatalf("posts = %d, want 2 (failed write must not be cached as synced)", got)
 	}
 }
 
@@ -742,7 +834,7 @@ func TestRun_StartsAndStops(t *testing.T) {
 		close(runDone)
 	}()
 
-	// Wait for the initial syncOnce + possibly one tick.
+	// Wait for the initial syncOnce + ticks to run.
 	time.Sleep(500 * time.Millisecond)
 
 	cancel()
@@ -754,8 +846,13 @@ func TestRun_StartsAndStops(t *testing.T) {
 		t.Fatal("Run did not stop within 2s of cancel")
 	}
 
-	if callCount < 4 {
-		t.Errorf("callCount = %d, want at least 4 (initial syncOnce)", callCount)
+	// New contract (change-detection): the initial syncOnce posts fleet
+	// summary + 1 project status + namespace summary = 3; every later cycle
+	// finds the payloads unchanged (synced_at stripped from the hash) and
+	// posts nothing. Ticks firing is proven by Run returning promptly on
+	// cancel; the dedupe itself is covered by TestPostMemory_ChangeDetection.
+	if callCount != 3 {
+		t.Errorf("callCount = %d, want 3 (initial syncOnce; unchanged payloads dedupe on later cycles)", callCount)
 	}
 }
 

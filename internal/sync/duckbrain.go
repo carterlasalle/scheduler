@@ -3,7 +3,9 @@ package sync
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,6 +45,13 @@ type DuckBrainSync struct {
 	pendingSpool []spoolItem
 	// pendingEvents buffers one-shot HIGH/recovery events for the cycle.
 	pendingEvents []pendingSyncEvent
+	// lastPayloads holds the canonical hash (synced_at stripped) of the last
+	// successfully posted payload per key. Unchanged payloads are SKIPPED on
+	// later cycles — the fleet sync unconditionally re-posts every project,
+	// namespace, event and tick every 5 minutes, which combined with
+	// DuckBrain's per-write auto-commits produced ~45k git commits/day and
+	// 490GB of loose objects in the coding-hermes namespace (2026-08-06).
+	lastPayloads map[string]string
 }
 
 // spoolItem is a buffered failed write awaiting DB persistence.
@@ -76,11 +85,12 @@ type HealthSnapshot struct {
 // baseURL is the DuckBrain HTTP server URL (e.g., http://localhost:3000).
 func NewDuckBrainSync(db *sql.DB, namespace, baseURL string) *DuckBrainSync {
 	return &DuckBrainSync{
-		db:         db,
-		namespace:  namespace,
-		baseURL:    baseURL,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
-		interval:   5 * time.Minute,
+		db:           db,
+		namespace:    namespace,
+		baseURL:      baseURL,
+		httpClient:   &http.Client{Timeout: 10 * time.Second},
+		interval:     5 * time.Minute,
+		lastPayloads: make(map[string]string),
 	}
 }
 
@@ -530,10 +540,44 @@ func (d *DuckBrainSync) syncTickLifecycle(ctx context.Context) error {
 
 // URL: {baseURL}/api/memories?namespace={namespace}
 // Body: {"key": key, "domain": domain, "content": <JSON of content>, "attributes": {}}
+// canonicalPayloadHash returns a stable hash of a payload with the volatile
+// synced_at field stripped, so "nothing changed since last cycle" is detected
+// despite the timestamp that changes on every marshal.
+func canonicalPayloadHash(content any) (string, error) {
+	raw, err := json.Marshal(content)
+	if err != nil {
+		return "", err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return "", err
+	}
+	delete(m, "synced_at")
+	canon, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(canon)
+	return hex.EncodeToString(sum[:]), nil
+}
+
 func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, content any) error {
 	payload, err := json.Marshal(content)
 	if err != nil {
 		return fmt.Errorf("marshal content: %w", err)
+	}
+
+	// Change detection: skip the POST entirely when the payload (minus the
+	// volatile synced_at) is unchanged since the last successful post. Only a
+	// SUCCESSFUL post records the hash, so a failed write is always retried.
+	hash, hashErr := canonicalPayloadHash(content)
+	if hashErr == nil {
+		d.mu.Lock()
+		prev, seen := d.lastPayloads[key]
+		d.mu.Unlock()
+		if seen && prev == hash {
+			return nil // unchanged — nothing to sync
+		}
 	}
 
 	body := map[string]any{
@@ -556,6 +600,12 @@ func (d *DuckBrainSync) postMemory(ctx context.Context, key, domain string, cont
 		return postErr
 	}
 	d.recordSuccess()
+	// Remember the successful payload so unchanged data is skipped next cycle.
+	if hashErr == nil {
+		d.mu.Lock()
+		d.lastPayloads[key] = hash
+		d.mu.Unlock()
+	}
 	return nil
 }
 
