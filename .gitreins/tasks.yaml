@@ -703,7 +703,7 @@ tasks:
     pushed to origin/main
   status: complete
   created_at: '2026-08-06T21:02:01.360370+00:00'
-  completed_at: '2026-08-06T21:22:15.254268+00:00'
+  completed_at: '2026-08-06T21:25:48.441454+00:00'
 - id: S-GAP-006
   title: 'S-GAP-006: CI workflows not triggering on push since 2026-08-05T17:54Z'
   criteria:
@@ -714,8 +714,9 @@ tasks:
   - 'Repo-side config verified sound: Actions enabled, allowed_actions all, workflows
     unchanged since Aug 1, no workflow-file edits in git log'
   - Board event documents the finding
-  status: pending
+  status: complete
   created_at: '2026-08-06T21:02:05.883246+00:00'
+  completed_at: '2026-08-06T21:27:59.481490+00:00'
 - id: S-GAP-008
   title: 'S-GAP-008: eduos-e2e dominates scheduler failure cluster'
   criteria:
@@ -726,5 +727,6 @@ tasks:
   - 'Failure share impact documented: eduos-e2e contribution to recent_outcomes failures
     after resolution'
   - Board event documents the finding
-  status: pending
+  status: complete
   created_at: '2026-08-06T21:02:06.070635+00:00'
+  completed_at: '2026-08-06T21:29:03.726630+00:00'
