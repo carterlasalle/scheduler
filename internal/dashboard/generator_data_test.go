@@ -81,6 +81,30 @@ func TestNextTickIn(t *testing.T) {
 	}
 }
 
+func TestFormatETA(t *testing.T) {
+	if got := formatETA(0); got != "—" {
+		t.Errorf("zero -> expected '—', got %q", got)
+	}
+	if got := formatETA(90 * time.Second); got != "1m" {
+		t.Errorf("90s -> expected '1m', got %q", got)
+	}
+	if got := formatETA(2 * time.Hour); got != "2h 0m" {
+		t.Errorf("2h -> expected '2h 0m', got %q", got)
+	}
+	if got := formatETA(26 * time.Hour); got != "1d 2h" {
+		t.Errorf("26h -> expected '1d 2h', got %q", got)
+	}
+	if got := formatETA(10 * 24 * time.Hour); got != "1w 3d" {
+		t.Errorf("10d -> expected '1w 3d', got %q", got)
+	}
+	// Regression: avgSecs (seconds) × steps must convert correctly — the old
+	// code treated seconds as nanoseconds and produced "0m" for any real ETA.
+	eta := formatETA(time.Duration(1142) * time.Second * time.Duration(24))
+	if eta != "7h 36m" {
+		t.Errorf("1142s x 24 steps -> expected '7h 36m', got %q", eta)
+	}
+}
+
 func TestTickDuration(t *testing.T) {
 	if got := tickDuration("", ""); got != "" {
 		t.Errorf("empty -> expected '', got %q", got)

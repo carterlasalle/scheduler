@@ -122,6 +122,7 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	// Board progress + next-tick timing from the project workdir/cooldown.
 	if project.Workdir != "" {
 		data.BoardDone, data.BoardTotal = readBoardProgress(filepath.Join(project.Workdir, ".coding-hermes", "tasks.md"))
+		data.BoardSteps = readBoardSteps(filepath.Join(project.Workdir, ".coding-hermes", "tasks.md"))
 	}
 	running := false
 	var lastCompleted string
@@ -131,10 +132,20 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 		running = latest != nil && latest.Status == database.StatusRunning
 	}
 	data.NextTickIn = nextTickIn(running, lastCompleted, project.CooldownS)
+	// Observability: avg tick duration, success rate, ETA over recent ticks.
+	var rt, rf int
+	rt, rf = g.recentTickHealth(ctx, name, 10)
+	data.AvgTickSecs, data.SuccessRate, data.ETA = g.observabilityStats(ctx, name, data.BoardDone, data.BoardTotal, rt, rf)
 
 	// Last 20 ticks for the history table.
 	if ticks, err := database.ListTicks(ctx, g.db, name, 20); err == nil {
 		data.RecentTicks = ticks
+	}
+
+	// "What each tick worked on": map tick id → commit subject line(s).
+	data.TickWork = map[string]string{}
+	for _, t := range data.RecentTicks {
+		data.TickWork[t.ID] = tickWork(project.Workdir, t.SpawnedAt, t.CompletedAt, t.Commits+1)
 	}
 
 	return g.projectTmpl.Execute(w, data)
@@ -404,7 +415,7 @@ const pageTemplate = `{{template "head" .}}
 <h2>Projects</h2>
 <div class="table-wrap">
 <table>
-<thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Progress</th><th>Steps Left</th><th>Next Tick</th><th>Cost</th><th>Recent</th></tr></thead>
+<thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Progress</th><th>Steps Left</th><th>ETA</th><th>Next Tick</th><th>Cost</th><th>Recent</th></tr></thead>
 <tbody id="fleet-overview"
 hx-get="/dashboard/partial"
 hx-trigger="every 10s"
@@ -425,6 +436,7 @@ hx-swap="innerHTML">
 {{end}}
 </td>
 <td>{{if .BoardTotal}}<span class="meta num">{{sub .BoardTotal .BoardDone}} left</span>{{else}}<span class="meta">—</span>{{end}}</td>
+<td class="num">{{if .ETA}}<span title="avg {{.AvgTickSecs}}s/tick · {{.SuccessRate}}% success">{{.ETA}}</span>{{else}}<span class="meta">—</span>{{end}}</td>
 <td class="{{if eq .NextTickIn "running"}}status-running{{else if eq .NextTickIn "due now"}}status-fail{{end}}">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</td>
 <td class="num">{{if .CostToday}}<span title="today">${{printf "%.3f" .CostToday}}</span>{{else}}<span class="meta">—</span>{{end}}{{if sparkline .CostSeries}}<br>{{sparkline .CostSeries}}{{end}}</td>
 <td class="num">{{if .RecentFailures}}<span class="status-fail">{{.RecentFailures}}/{{.RecentTicks}}</span>{{else if .RecentTicks}}<span class="status-ok">{{.RecentTicks}} ok</span>{{else}}<span class="meta">—</span>{{end}}</td>

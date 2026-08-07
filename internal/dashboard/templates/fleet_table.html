@@ -1,4 +1,4 @@
-{{define "fleet_table"}}<tbody id="fleet-overview">
+{{define "fleet_table"}}
 {{range .Projects}}
 <tr class="{{if not .Enabled}}disabled{{end}}">
 <td><a href="/projects/{{.Name}}">{{.Name}}</a>{{if .RecentFailures}} <span class="fail-flag" title="{{.RecentFailures}} of last {{.RecentTicks}} ticks failed/timed out">●</span>{{end}}</td>
@@ -15,8 +15,9 @@
 {{end}}
 </td>
 <td>{{if .BoardTotal}}<span class="meta num">{{sub .BoardTotal .BoardDone}} left</span>{{else}}<span class="meta">—</span>{{end}}</td>
+<td class="num">{{if .ETA}}<span title="avg {{.AvgTickSecs}}s/tick · {{.SuccessRate}}% success">{{.ETA}}</span>{{else}}<span class="meta">—</span>{{end}}</td>
 <td class="{{if eq .NextTickIn "running"}}status-running{{else if eq .NextTickIn "due now"}}status-fail{{end}}">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</td>
 <td class="num">{{if .CostToday}}<span title="today">${{printf "%.3f" .CostToday}}</span>{{else}}<span class="meta">—</span>{{end}}{{if sparkline .CostSeries}}<br>{{sparkline .CostSeries}}{{end}}</td>
 <td class="num">{{if .RecentFailures}}<span class="status-fail">{{.RecentFailures}}/{{.RecentTicks}}</span>{{else if .RecentTicks}}<span class="status-ok">{{.RecentTicks}} ok</span>{{else}}<span class="meta">—</span>{{end}}</td>
 </tr>{{end}}
-</tbody>{{end}}
+{{end}}

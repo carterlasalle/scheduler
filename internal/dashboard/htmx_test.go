@@ -24,9 +24,12 @@ func TestGenerateFleetTable_RendersTBody(t *testing.T) {
 	}
 	out := buf.String()
 
-	// Must contain the tbody wrapper that the dashboard page expects.
-	if !strings.Contains(out, `<tbody id="fleet-overview">`) {
-		t.Errorf("expected <tbody id=\"fleet-overview\"> wrapper, got: %q", snippet(out, "fleet"))
+	// The partial is rows-only (no tbody wrapper) because the page's
+	// <tbody id="fleet-overview"> uses hx-swap="innerHTML" — a nested tbody
+	// would misalign the columns against the <thead>. Rows must reference the
+	// drill-down links so htmx keeps them clickable.
+	if strings.Contains(out, "<tbody") {
+		t.Errorf("partial must NOT emit a tbody wrapper (htmx swaps innerHTML); got: %q", snippet(out, "tbody"))
 	}
 	// Must NOT contain full-page chrome (this is a partial, not a page).
 	if strings.Contains(out, "<!DOCTYPE html>") {
@@ -58,9 +61,10 @@ func TestGenerateFleetTable_WithProjects(t *testing.T) {
 	if !strings.Contains(out, `href="/projects/beta"`) {
 		t.Errorf("expected link to /projects/beta, got: %s", snippet(out, "beta"))
 	}
-	// Closing tbody must appear (the partial must be a complete fragment).
-	if !strings.Contains(out, "</tbody>") {
-		t.Errorf("expected closing </tbody> in partial")
+	// Rows-only fragment: must contain <tr> with drill-down links (no tbody
+	// wrapper — htmx swaps innerHTML into the page's tbody).
+	if !strings.Contains(out, "<tr") {
+		t.Errorf("expected row markup in partial")
 	}
 }
 

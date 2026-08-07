@@ -16,8 +16,36 @@
 {{if .BoardTotal}}
 <div class="card"><div class="label">Board Progress</div><div class="value" style="font-size:1.1rem">{{.BoardDone}}/{{.BoardTotal}}</div><div class="sub">{{percent .BoardDone .BoardTotal}}% complete</div></div>
 <div class="card"><div class="label">Steps Left</div><div class="value">{{sub .BoardTotal .BoardDone}}</div></div>
+<div class="card"><div class="label">Est. Completion</div><div class="value" style="font-size:1.1rem">{{if .ETA}}{{.ETA}}{{else}}—{{end}}</div><div class="sub">{{if .AvgTickSecs}}{{.AvgTickSecs}}s/tick{{end}}</div></div>
 {{end}}
 </div>
+
+{{if .BoardSteps}}
+<h2>Roadmap</h2>
+<p class="meta">{{.BoardDone}} of {{.BoardTotal}} steps done · {{.SuccessRate}}% success (last 10 ticks) · est. completion {{if .ETA}}{{.ETA}}{{else}}—{{end}}</p>
+<div class="roadmap">
+{{range .BoardSteps}}
+<div class="step {{.Status}}" data-status="{{.Status}}">
+<span class="step-id">{{.ID}}</span>
+<span class="step-title">{{.Title}}</span>
+{{if .Commit}}<span class="step-commit mono">{{.Commit}}</span>{{end}}
+</div>
+{{end}}
+</div>
+<style>
+.roadmap{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px}
+.step{display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);font-size:0.78rem}
+.step .step-id{font-family:var(--mono);font-weight:600;color:var(--muted)}
+.step .step-title{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+.step .step-commit{color:var(--faint);font-size:0.7rem}
+.step.done{border-color:rgba(55,211,153,0.4);background:rgba(55,211,153,0.06)}
+.step.done .step-id{color:var(--ok)}
+.step.active{border-color:var(--signal);background:rgba(232,163,61,0.08);box-shadow:0 0 0 1px var(--signal)}
+.step.active .step-id{color:var(--signal-hi)}
+.step.pending{opacity:0.7}
+.work{white-space:normal;min-width:240px;max-width:360px;color:var(--text);font-size:0.78rem;line-height:1.4}
+</style>
+{{end}}
 
 <h2>Latest Tick</h2>
 {{if .LatestTick}}
@@ -45,7 +73,7 @@
 {{if .RecentTicks}}
 <div class="table-wrap">
 <table>
-<thead><tr><th>ID</th><th>Status</th><th>Outcome</th><th>Duration</th><th>Spawned</th><th>Commits</th><th>Files</th><th>Cost</th></tr></thead>
+<thead><tr><th>ID</th><th>Status</th><th>Outcome</th><th>Duration</th><th>Spawned</th><th>Work</th><th>Commits</th><th>Files</th><th>Cost</th></tr></thead>
 <tbody>
 {{range .RecentTicks}}
 <tr>
@@ -54,6 +82,7 @@
   <td>{{if .Outcome}}{{.Outcome}}{{else}}—{{end}}</td>
   <td class="num">{{if .CompletedAt}}{{duration .SpawnedAt .CompletedAt}}{{else}}—{{end}}</td>
   <td class="meta">{{.SpawnedAt}}</td>
+  <td class="work">{{if index $.TickWork .ID}}{{index $.TickWork .ID}}{{else}}<span class="meta">—</span>{{end}}</td>
   <td class="num">{{.Commits}}</td>
   <td class="num">{{.FilesChanged}}</td>
   <td class="num">${{printf "%.4f" .CostUSD}}</td>

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -59,6 +60,11 @@ type FleetRow struct {
 	CostSeries      []float64
 	RecentFailures  int
 	RecentTicks     int
+	// Observability: average tick duration (seconds), success rate (0-100),
+	// and estimated time-to-completion (from avg duration × steps left).
+	AvgTickSecs  int
+	SuccessRate  int // percent
+	ETA          string
 }
 
 // TickRow is one tick in the history table.
@@ -119,6 +125,19 @@ type ProjectDetailData struct {
 	BoardDone   int
 	BoardTotal  int
 	NextTickIn  string
+	AvgTickSecs int
+	SuccessRate int
+	ETA         string
+	BoardSteps  []BoardStep
+	TickWork    map[string]string // tick id → what it worked on (commit subjects)
+}
+
+// BoardStep is one task row from the board, for the roadmap visualization.
+type BoardStep struct {
+	ID     string
+	Title  string
+	Status string // "done" | "active" | "pending"
+	Commit string
 }
 
 // TickHistoryData holds one page of the global tick history.
@@ -249,14 +268,15 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		}
 	}
 
-	// Second pass for cost sparklines + recent failure flags. Done AFTER the
-	// project rows cursor is fully closed — the modernc.org/sqlite driver
-	// deadlocks if we open nested queries on the same connection while a rows
-	// cursor is still open (the collect() N+1 warning).
+	// Second pass for cost sparklines + recent failure flags + observability.
+	// Done AFTER the project rows cursor is fully closed — the modernc.org/sqlite
+	// driver deadlocks if we open nested queries on the same connection while a
+	// rows cursor is still open (the collect() N+1 warning).
 	for i := range data.Projects {
 		r := &data.Projects[i]
 		r.CostSeries = g.recentCostSeries(ctx, r.Name, 12)
 		r.RecentTicks, r.RecentFailures = g.recentTickHealth(ctx, r.Name, 10)
+		r.AvgTickSecs, r.SuccessRate, r.ETA = g.observabilityStats(ctx, r.Name, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
 	}
 
 	// Active ticks count.
@@ -524,4 +544,218 @@ func tickDuration(spawned, completed string) string {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	}
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+}
+
+// observabilityStats returns (avgTickSecs, successRatePct, eta) for a project
+// over its recent completed ticks. avg is the mean duration of the last N
+// completed ticks (lower-bounded at 60s so a single instant tick can't zero the
+// estimate); successRate is % of last N ticks that completed (vs failed/timeout).
+// eta uses avg duration × remaining board steps (or a plain "—" when the board
+// is complete or there's no duration signal).
+func (g *Generator) observabilityStats(ctx context.Context, project string, boardDone, boardTotal int, recentTicks, recentFailures int) (avgSecs, successPct int, eta string) {
+	// Average duration over up-to-10 completed ticks.
+	rows, err := g.db.QueryContext(ctx, `
+		SELECT spawned_at, completed_at FROM ticks
+		WHERE project_name = ? AND status = 'completed' AND completed_at != ''
+		ORDER BY spawned_at DESC LIMIT 10
+	`, project)
+	var total time.Duration
+	var count int
+	if err == nil {
+		for rows.Next() {
+			var sp, co string
+			if rows.Scan(&sp, &co) == nil {
+				if d := parseDuration(sp, co); d > 0 {
+					total += d
+					count++
+				}
+			}
+		}
+		_ = rows.Close()
+	}
+	if count > 0 {
+		avgSecs = int(total.Seconds() / float64(count))
+		if avgSecs < 60 {
+			avgSecs = 60 // floor so ETA isn't absurdly short
+		}
+	}
+
+	// Success rate over the last N ticks (recentTicks = total, recentFailures = bad).
+	if recentTicks > 0 {
+		successPct = (recentTicks - recentFailures) * 100 / recentTicks
+	}
+
+	// ETA = avg duration × steps remaining.
+	if avgSecs > 0 && boardTotal > 0 {
+		remaining := boardTotal - boardDone
+		if remaining > 0 {
+			// avgSecs is in seconds; convert to a Duration properly.
+			eta = formatETA(time.Duration(avgSecs) * time.Second * time.Duration(remaining))
+		}
+	}
+	return avgSecs, successPct, eta
+}
+
+func parseDuration(spawned, completed string) time.Duration {
+	s, err1 := time.Parse(time.RFC3339, spawned)
+	c, err2 := time.Parse(time.RFC3339, completed)
+	if err1 != nil || err2 != nil {
+		return 0
+	}
+	d := c.Sub(s)
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
+// formatETA renders a duration as a compact human string, e.g. "1h 24m",
+// "2d 3h", "3w 2d". Falls back to "—" for zero/negative.
+func formatETA(d time.Duration) string {
+	if d <= 0 {
+		return "—"
+	}
+	const (
+		day  = 24 * time.Hour
+		week = 7 * day
+	)
+	switch {
+	case d >= week:
+		return fmt.Sprintf("%dw %dd", int(d/week), int(d%week/day))
+	case d >= day:
+		return fmt.Sprintf("%dd %dh", int(d/day), int(d%day/time.Hour))
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh %dm", int(d/time.Hour), int(d%time.Hour/time.Minute))
+	default:
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	}
+}
+
+// tickWork returns the commit subject lines that landed between spawned and
+// completed for a project, by scanning the workdir git log. It's the
+// observability answer to "what did this tick actually work on?" Best-effort:
+// on any git error it returns "". commitCount caps how many messages we fetch.
+func tickWork(workdir, spawned, completed string, commitCount int) string {
+	if workdir == "" || spawned == "" {
+		return ""
+	}
+	// If completed is empty, only show commits strictly after spawned.
+	since, err1 := time.Parse(time.RFC3339, spawned)
+	if err1 != nil {
+		return ""
+	}
+	var until time.Time
+	if completed != "" {
+		until, err1 = time.Parse(time.RFC3339, completed)
+		if err1 != nil {
+			until = time.Now()
+		}
+	} else {
+		until = time.Now()
+	}
+	if until.Before(since) {
+		until = time.Now()
+	}
+
+	// git log --pretty=%s (subject only) with `--since`/`--until` in ISO.
+	args := []string{
+		"-C", workdir, "log",
+		"--since=" + since.Add(-2*time.Second).Format(time.RFC3339),
+		"--until=" + until.Add(2*time.Second).Format(time.RFC3339),
+		"--pretty=%s", "-n", fmt.Sprintf("%d", commitCount),
+	}
+	cmd := exec.Command("git", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var kept []string
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	return strings.Join(kept, " · ")
+}
+// readBoardSteps parses a board into an ordered roadmap of steps (completed
+// first, then pending). The first pending task is marked "active" (next up).
+// The NEVER-DONE perpetual audit is excluded. Returns nil on missing/unreadable.
+func readBoardSteps(path string) []BoardStep {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	type row struct {
+		id, title, commit string
+	}
+	var doneRows, pendingRows []row
+	section := ""
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		switch {
+		case strings.HasPrefix(line, "## "):
+			low := strings.ToLower(line)
+			switch {
+			case strings.Contains(low, "active"):
+				section = "active"
+			case strings.Contains(low, "completed"):
+				section = "completed"
+			default:
+				section = "other"
+			}
+		case strings.HasPrefix(line, "| T"):
+			// Table row: | T05 | Title | ... |
+			// cols[1]=ID, cols[2]=title. Only COMPLETED rows carry a commit
+			// hash in a trailing cell; Active/pending rows have deps + model
+			// names (e.g. "GLM-5.2") that look hash-like, so don't guess there.
+			cols := strings.Split(line, "|")
+			var id, title, commit string
+			if len(cols) > 1 {
+				id = strings.TrimSpace(cols[1])
+			}
+			if len(cols) > 2 {
+				title = strings.TrimSpace(cols[2])
+			}
+			if section == "completed" {
+				for i := len(cols) - 1; i >= 3; i-- {
+					c := strings.TrimSpace(cols[i])
+					if c != "" && (len(c) == 7 || len(c) == 40) {
+						commit = c
+						break
+					}
+				}
+			}
+			if id == "" {
+				continue
+			}
+			r := row{id: id, title: title, commit: commit}
+			if section == "active" {
+				pendingRows = append(pendingRows, r)
+			} else if section == "completed" {
+				doneRows = append(doneRows, r)
+			}
+		}
+	}
+	if len(doneRows) == 0 && len(pendingRows) == 0 {
+		return nil
+	}
+	// Order: completed first (in board order), then pending.
+	out := make([]BoardStep, 0, len(doneRows)+len(pendingRows))
+	for _, r := range doneRows {
+		out = append(out, BoardStep{ID: r.id, Title: r.title, Status: "done", Commit: r.commit})
+	}
+	for i, r := range pendingRows {
+		status := "pending"
+		if i == 0 {
+			status = "active" // next up
+		}
+		out = append(out, BoardStep{ID: r.id, Title: r.title, Status: status, Commit: r.commit})
+	}
+	return out
 }
