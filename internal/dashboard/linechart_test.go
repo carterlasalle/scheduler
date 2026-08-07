@@ -40,6 +40,13 @@ func TestRenderLineChart(t *testing.T) {
 	if !strings.Contains(svg, "14:00") || !strings.Contains(svg, "16:00") {
 		t.Errorf("chart missing x-axis labels: %q", svg)
 	}
+	// Per-point hover tooltips (<title> inside circles) with time + value.
+	if !strings.Contains(svg, "15:00 · 900s") {
+		t.Errorf("chart missing per-point tooltip '15:00 · 900s': %q", svg)
+	}
+	if !strings.Contains(svg, "<title>") {
+		t.Errorf("chart missing <title> tooltips: %q", svg)
+	}
 
 	costSvg := string(renderLineChart(pts, "cost"))
 	if !strings.Contains(costSvg, "aria-label=\"cost over time\"") {

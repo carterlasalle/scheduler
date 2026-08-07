@@ -92,6 +92,9 @@ tbody tr{transition:background 140ms var(--ease-out)}
 .ax-label{fill:var(--muted);font-size:9px;font-family:var(--mono)}
 .ax-grid{stroke:var(--border);stroke-width:1;stroke-dasharray:3 3}
 .chart-val{font-family:var(--mono);font-size:11px;font-weight:600}
+.chart .pt{fill:var(--fg);cursor:pointer;transition:r 120ms var(--ease-out)}
+.chart .pt:hover{fill:var(--signal);r:5}
+@media (prefers-reduced-motion: reduce){.chart .pt{transition:none}}
 .pill.ok{color:var(--ok);border-color:rgba(55,211,153,0.35)}
 .pill.fail{color:var(--err);border-color:rgba(255,107,107,0.35)}
 .pill.warn{color:var(--warn);border-color:rgba(232,163,61,0.4)}

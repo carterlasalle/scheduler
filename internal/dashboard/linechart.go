@@ -53,8 +53,8 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 		scale = 1
 	}
 
-	// Build the polyline + area path + last-point label.
-	var line, area strings.Builder
+	// Build the polyline + area path + per-point tooltips (circles with <title>).
+	var line, area, points strings.Builder
 	var lastX, lastY float64
 	step := plotW / float64(len(pts)-1)
 	for i, v := range values {
@@ -62,6 +62,11 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 		y := padT + plotH*(1.0-v/scale)
 		line.WriteString(fmt.Sprintf("%s%.1f,%.1f", comma(i), x, y))
 		lastX, lastY = x, y
+		// One hover circle per point with a native <title> tooltip: time + value.
+		tt := pointTitle(pts[i], v, mode)
+		points.WriteString(fmt.Sprintf(
+			`<circle cx="%.1f" cy="%.1f" r="3.5" class="pt"><title>%s</title></circle>`,
+			x, y, template.HTMLEscapeString(tt)))
 	}
 	// Area: close the line down to the baseline.
 	area.WriteString(fmt.Sprintf("M%.1f,%.1f", padL, padT+plotH))
@@ -109,6 +114,7 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 <circle cx="%.1f" cy="%.1f" r="3" fill="%s"/>
 <text x="%.1f" y="%.1f" class="chart-val" text-anchor="end" fill="%s">%s</text>
 %s
+%s
 </svg>`,
 		w, h, esc(modeTitle(mode)),
 		grid, area.String(), color, fillOpacity,
@@ -116,7 +122,29 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 		lastX, lastY, color,
 		w-padR+4, lastY-8, color, esc(label),
 		xLabels.String(),
+		points.String(),
 	))
+}
+
+// pointTitle returns the native tooltip text for a chart point: its time label
+// and the value at that point, e.g. "16:44 · 29m52s" or "16:44 · $0.032".
+func pointTitle(p SpeedCostPoint, v float64, mode string) string {
+	label := p.Label
+	if label == "" {
+		label = "tick"
+	}
+	var val string
+	switch mode {
+	case "cost":
+		val = fmt.Sprintf("$%.3f", v)
+	case "commits":
+		val = fmt.Sprintf("%d commits", int(v))
+	case "files":
+		val = fmt.Sprintf("%d files", int(v))
+	default:
+		val = fmt.Sprintf("%ds", int(v))
+	}
+	return label + " · " + val
 }
 
 func modeTitle(mode string) string {

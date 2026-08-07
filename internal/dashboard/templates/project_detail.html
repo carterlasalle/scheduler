@@ -75,6 +75,7 @@
 <h2>Speed &amp; Output Over Time</h2>
 <p class="meta">Per completed tick · timeouts/failures with no output omitted · lower speed line = faster tick · last 20 ticks</p>
 <div class="charts">
+<div class="chart-col">
 <div class="chart-card">
 <div class="chart-title">Speed (tick duration)</div>
 {{linechart .SpeedCost "speed"}}
@@ -83,6 +84,8 @@
 <div class="chart-title">Cost per tick</div>
 {{linechart .SpeedCost "cost"}}
 </div>
+</div>
+<div class="chart-col">
 <div class="chart-card">
 <div class="chart-title">Commits per tick</div>
 {{linechart .SpeedCost "commits"}}
@@ -92,10 +95,13 @@
 {{linechart .SpeedCost "files"}}
 </div>
 </div>
+</div>
 <style>
-.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-bottom:6px}
+.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:6px}
+.chart-col{display:flex;flex-direction:column;gap:18px;min-width:0}
 .chart-card{min-width:0}
 .chart-title{font-size:0.68rem;text-transform:uppercase;letter-spacing:0.09em;color:var(--muted);font-family:var(--mono);margin-bottom:6px}
+@media(max-width:760px){.charts{grid-template-columns:1fr}}
 </style>
 {{end}}
 
