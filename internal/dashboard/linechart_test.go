@@ -20,11 +20,18 @@ func TestRenderLineChart(t *testing.T) {
 		{Label: "16:00", Duration: 600, Cost: 0.064},
 	}
 	svg := string(renderLineChart(pts, "speed"))
-	if !strings.Contains(svg, "<svg") || !strings.Contains(svg, "polyline points") {
-		// Note: we emit <path d=...>, not polyline; just check for path + svg.
-		if !strings.Contains(svg, `<path d="`) {
-			t.Fatalf("speed chart missing line path: %q", svg)
-		}
+	if !strings.Contains(svg, "<svg") || !strings.Contains(svg, `<path d="`) {
+		t.Fatalf("speed chart missing line path: %q", svg)
+	}
+	// Dither-kit look: gradient defs + bloom glow filter + per-series palette.
+	if !strings.Contains(svg, "<linearGradient") {
+		t.Errorf("chart missing dither gradient fill: %q", svg)
+	}
+	if !strings.Contains(svg, "<feGaussianBlur") {
+		t.Errorf("chart missing dither bloom glow: %q", svg)
+	}
+	if !strings.Contains(svg, "#2dd4a7") {
+		t.Errorf("speed chart should use dither green: %q", svg)
 	}
 	if !strings.Contains(svg, "role=\"img\"") {
 		t.Errorf("chart missing role=img for a11y")

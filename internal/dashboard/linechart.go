@@ -85,18 +85,24 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 	default:
 		label = fmt.Sprintf("%ds", int(values[len(values)-1]))
 	}
-	color := "var(--live)"
-	fillOpacity := "0.10"
+	// Dither-kit color palette + gradient for each series.
+	// color is the solid line + gradient stop; glow is the "bloom" halo.
+	var color string
+	var glowOpacity string
 	switch mode {
 	case "cost":
-		color = "var(--signal)"
-		fillOpacity = "0.08"
+		color, glowOpacity = "#e8a33d", "0.55" // orange
 	case "commits":
-		color = "var(--ok)"
+		color, glowOpacity = "#a78bfa", "0.55" // purple
 	case "files":
-		color = "var(--text)"
-		fillOpacity = "0.06"
+		color, glowOpacity = "#7a8398", "0.45" // grey
+	default:
+		color, glowOpacity = "#2dd4a7", "0.60" // green
 	}
+
+	// Unique gradient + glow ids per mode so multiple charts don't collide.
+	gid := "g" + mode
+	glid := "gl" + mode
 
 	var xLabels strings.Builder
 	xLabels.WriteString(fmt.Sprintf(`<text x="%.1f" y="%.1f" class="ax-label" text-anchor="start">%s</text>`, padL, h-4, esc(pts[0].Label)))
@@ -106,18 +112,33 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 	// A light top gridline at the max for a reference.
 	grid = fmt.Sprintf(`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" class="ax-grid"/>`, padL, padT, padL+plotW, padT)
 
+	// Dither-kit area chart: linear gradient fill (color→transparent), a
+	// blurred "bloom" glow under the line, then the crisp line on top.
 	return template.HTML(fmt.Sprintf(
 		`<svg class="chart" viewBox="0 0 %.0f %.0f" role="img" aria-label="%s over time">
+<defs>
+<linearGradient id="%s" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%%" stop-color="%s" stop-opacity="0.50"/>
+<stop offset="100%%" stop-color="%s" stop-opacity="0"/>
+</linearGradient>
+<filter id="%s" x="-20%%" y="-20%%" width="140%%" height="140%%">
+<feGaussianBlur stdDeviation="5"/>
+</filter>
+</defs>
 %s
-<path d="%s" fill="%s" fill-opacity="%s"/>
-<path d="%s" fill="none" stroke="%s" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="%.1f" cy="%.1f" r="3" fill="%s"/>
+<path d="%s" fill="url(#%s)"/>
+<path d="%s" fill="none" stroke="%s" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" opacity="%s" filter="url(#%s)"/>
+<path d="%s" fill="none" stroke="%s" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="%.1f" cy="%.1f" r="3.5" fill="%s" class="pt-end"/>
 <text x="%.1f" y="%.1f" class="chart-val" text-anchor="end" fill="%s">%s</text>
 %s
 %s
 </svg>`,
 		w, h, esc(modeTitle(mode)),
-		grid, area.String(), color, fillOpacity,
+		gid, color, color,
+		glid,
+		grid, area.String(), gid,
+		line.String(), color, glowOpacity, glid,
 		line.String(), color,
 		lastX, lastY, color,
 		w-padR+4, lastY-8, color, esc(label),
