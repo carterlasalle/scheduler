@@ -14,9 +14,9 @@ ExecStart=%h/coding-hermes-scheduler/bin/schedulerd \
   -db %h/.hermes/coding-hermes/scheduler.db \
   -listen 127.0.0.1:9090 \
   --namespace-mode \
-  --max-concurrent 10 \
+  --max-concurrent 4 \
   --min-interval 30s \
-  --tick-timeout 600s \
+  --tick-timeout 7200s \
   --gateway-url=http://127.0.0.1:8642 \
   --gateway-key ${API_SERVER_KEY}
 Restart=on-failure

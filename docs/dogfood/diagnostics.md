@@ -10,7 +10,7 @@ the repo, not from test colors.
 - **Go 1.26+ daemon** (`cmd/schedulerd/`), `net/http` ServeMux, Go 1.22+
   method patterns. Single binary `bin/schedulerd`.
 - **SQLite via modernc.org/sqlite** (pure Go, WAL mode). Live DB:
-  `/home/kara/.hermes/coding-hermes/scheduler.db`. Schema: projects,
+  `~/.hermes/coding-hermes/scheduler.db`. Schema: projects,
   namespaces, ticks, events, migrations. Board state (`.coding-hermes/board/`)
   is separate: DuckDB live store + JSONL git mirror (see INFRA-013).
 - **Scheduler loop** (`internal/scheduler/`): every 60s evaluate → urgency =
