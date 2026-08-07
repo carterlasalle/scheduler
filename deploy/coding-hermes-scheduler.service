@@ -4,28 +4,31 @@ After=network.target hermes-gateway.service
 
 [Service]
 Type=simple
-User=kara
+User=%i
 KillMode=control-group
 KillSignal=SIGTERM
 TimeoutStopSec=30
 ExecStartPre=-/usr/bin/pkill -f "hermes.*foreman"
 ExecStartPre=-/usr/bin/pkill -f "duckbrain"
-ExecStart=/home/kara/coding-hermes-scheduler/coding-herms-scheduler/bin/schedulerd \
-  -db /home/kara/.hermes/coding-hermes/scheduler.db \
+ExecStart=%h/coding-hermes-scheduler/bin/schedulerd \
+  -db %h/.hermes/coding-hermes/scheduler.db \
   -listen 127.0.0.1:9090 \
   --namespace-mode \
   --max-concurrent 10 \
   --min-interval 30s \
   --tick-timeout 600s \
-  --gateway-url=http://127.0.0.1:8642
+  --gateway-url=http://127.0.0.1:8642 \
+  --gateway-key ${API_SERVER_KEY}
 Restart=on-failure
 RestartSec=30
 MemoryMax=8G
 StandardOutput=journal
 StandardError=journal
-Environment=HOME=/home/kara
-Environment=PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin
-Environment=API_SERVER_KEY=WZJhtlvVMXfW6ydE2hJgVyJpi6TBYN91fZ22vldTqzE
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Load the gateway API key from a root-owned env file (chmod 600):
+#   /etc/coding-hermes/gateway.env  →  API_SERVER_KEY=<key>
+EnvironmentFile=-/etc/coding-hermes/gateway.env
 
 [Install]
 WantedBy=default.target
