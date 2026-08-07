@@ -59,7 +59,7 @@ url = "http://localhost:3000"
 # [[projects]]
 # name = "my-project"
 # repo_url = "https://github.com/example/my-project"
-# workdir = "/home/kara/my-project"
+# workdir = "/absolute/path/to/my-project"
 # weight = 10
 # priority = 5
 # cooldown_s = 900
