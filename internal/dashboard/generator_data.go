@@ -512,20 +512,25 @@ func nextTickIn(running bool, lastTickCompleted string, cooldownS int) string {
 	return fmt.Sprintf("in %dm %ds", m, s)
 }
 
-// SpeedCostPoint is one completed tick's (time, speed, cost) data point for the
-// per-project speed/cost chart.
+// SpeedCostPoint is one completed tick's (time, speed, cost, output) data point
+// for the per-project speed/cost/commits/files charts.
 type SpeedCostPoint struct {
 	Label    string // "14:12", "16:44", ...
 	Duration int    // tick duration in seconds (speed)
 	Cost     float64
+	Commits  int
+	Files    int
 }
 
 // speedCostSeries returns the last up-to-n completed ticks for a project,
-// oldest→newest, as (label, durationSecs, cost) points. Used to draw the
-// speed-over-time and cost-over-time charts. Returns nil on error / empty.
+// oldest→newest, as (label, durationSecs, cost, commits, files) points. Used to
+// draw the speed/cost/commits/files-over-time charts. Returns nil on error /
+// empty. Only ticks that produced output (commits>0 || files>0 || cost>0) are
+// included — pure timeouts/failures (0/0/0) are omitted since they output
+// nothing meaningful.
 func (g *Generator) speedCostSeries(ctx context.Context, project string, n int) []SpeedCostPoint {
 	rows, err := g.db.QueryContext(ctx, `
-		SELECT spawned_at, completed_at, cost_usd FROM ticks
+		SELECT spawned_at, completed_at, cost_usd, commits, files_changed FROM ticks
 		WHERE project_name = ? AND status = 'completed' AND completed_at != ''
 		ORDER BY spawned_at DESC LIMIT ?
 	`, project, n)
@@ -537,12 +542,19 @@ func (g *Generator) speedCostSeries(ctx context.Context, project string, n int) 
 		label    string
 		duration int
 		cost     float64
+		commits  int
+		files    int
 	}
 	var reversed []rev
 	for rows.Next() {
 		var sp, co string
 		var cost float64
-		if rows.Scan(&sp, &co, &cost) != nil {
+		var commits, files int
+		if rows.Scan(&sp, &co, &cost, &commits, &files) != nil {
+			continue
+		}
+		// Skip zero-output ticks (nothing committed / no files changed / no cost).
+		if commits <= 0 && files <= 0 && cost <= 0 {
 			continue
 		}
 		d := parseDuration(sp, co)
@@ -553,7 +565,7 @@ func (g *Generator) speedCostSeries(ctx context.Context, project string, n int) 
 		if t, err := time.Parse(time.RFC3339, sp); err == nil {
 			label = t.Local().Format("15:04")
 		}
-		reversed = append(reversed, rev{label: label, duration: int(d.Seconds()), cost: cost})
+		reversed = append(reversed, rev{label: label, duration: int(d.Seconds()), cost: cost, commits: commits, files: files})
 	}
 	if len(reversed) == 0 {
 		return nil
@@ -561,7 +573,7 @@ func (g *Generator) speedCostSeries(ctx context.Context, project string, n int) 
 	// Reverse to oldest→newest.
 	out := make([]SpeedCostPoint, 0, len(reversed))
 	for i := len(reversed) - 1; i >= 0; i-- {
-		out = append(out, SpeedCostPoint{Label: reversed[i].label, Duration: reversed[i].duration, Cost: reversed[i].cost})
+		out = append(out, SpeedCostPoint{Label: reversed[i].label, Duration: reversed[i].duration, Cost: reversed[i].cost, Commits: reversed[i].commits, Files: reversed[i].files})
 	}
 	return out
 }

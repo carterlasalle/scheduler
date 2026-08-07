@@ -7,8 +7,8 @@ import (
 )
 
 // renderLineChart builds a hand-rolled SVG line chart from []SpeedCostPoint.
-// mode "speed" plots tick duration in seconds (higher = slower, so a shorter
-// bar is faster), "cost" plots cost_usd. Returns "" for empty/invalid input.
+// mode is one of "speed" (tick duration in seconds, higher = slower),
+// "cost" (cost_usd), "commits", or "files". Returns "" for empty/invalid input.
 // No external chart library — the dashboard is deliberately no-CDN.
 //
 // Layout: fixed 640x160 viewBox. Y axis auto-scales to the max value with a
@@ -29,9 +29,14 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 	maxV := 0.0
 	for i, p := range pts {
 		var v float64
-		if mode == "cost" {
+		switch mode {
+		case "cost":
 			v = p.Cost
-		} else {
+		case "commits":
+			v = float64(p.Commits)
+		case "files":
+			v = float64(p.Files)
+		default:
 			v = float64(p.Duration)
 		}
 		values[i] = v
@@ -65,18 +70,27 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 
 	// Value label + axis labels (first/last timestamps).
 	var label string
-	if mode == "cost" {
+	switch mode {
+	case "cost":
 		label = fmt.Sprintf("$%.3f", values[len(values)-1])
-	} else {
+	case "commits":
+		label = fmt.Sprintf("%d commits", int(values[len(values)-1]))
+	case "files":
+		label = fmt.Sprintf("%d files", int(values[len(values)-1]))
+	default:
 		label = fmt.Sprintf("%ds", int(values[len(values)-1]))
 	}
 	color := "var(--live)"
-	if mode == "cost" {
-		color = "var(--signal)"
-	}
 	fillOpacity := "0.10"
-	if mode == "cost" {
+	switch mode {
+	case "cost":
+		color = "var(--signal)"
 		fillOpacity = "0.08"
+	case "commits":
+		color = "var(--ok)"
+	case "files":
+		color = "var(--text)"
+		fillOpacity = "0.06"
 	}
 
 	var xLabels strings.Builder
@@ -106,10 +120,16 @@ func renderLineChart(pts []SpeedCostPoint, mode string) template.HTML {
 }
 
 func modeTitle(mode string) string {
-	if mode == "cost" {
+	switch mode {
+	case "cost":
 		return "cost"
+	case "commits":
+		return "commits"
+	case "files":
+		return "files"
+	default:
+		return "speed"
 	}
-	return "speed"
 }
 
 func comma(i int) string {

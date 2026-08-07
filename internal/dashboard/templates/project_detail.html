@@ -72,8 +72,8 @@
 {{end}}
 
 {{if .SpeedCost}}
-<h2>Speed &amp; Cost Over Time</h2>
-<p class="meta">Per completed tick · lower speed line = faster tick · last 20 ticks</p>
+<h2>Speed &amp; Output Over Time</h2>
+<p class="meta">Per completed tick · timeouts/failures with no output omitted · lower speed line = faster tick · last 20 ticks</p>
 <div class="charts">
 <div class="chart-card">
 <div class="chart-title">Speed (tick duration)</div>
@@ -82,6 +82,14 @@
 <div class="chart-card">
 <div class="chart-title">Cost per tick</div>
 {{linechart .SpeedCost "cost"}}
+</div>
+<div class="chart-card">
+<div class="chart-title">Commits per tick</div>
+{{linechart .SpeedCost "commits"}}
+</div>
+<div class="chart-card">
+<div class="chart-title">Files changed per tick</div>
+{{linechart .SpeedCost "files"}}
 </div>
 </div>
 <style>

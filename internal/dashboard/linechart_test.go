@@ -48,4 +48,19 @@ func TestRenderLineChart(t *testing.T) {
 	if !strings.Contains(costSvg, "$0.064") {
 		t.Errorf("cost chart missing last-value label '$0.064': %q", costSvg)
 	}
+
+	// commits + files modes.
+	cp := []SpeedCostPoint{
+		{Label: "a", Duration: 100, Cost: 0.03, Commits: 2, Files: 7},
+		{Label: "b", Duration: 100, Cost: 0.03, Commits: 3, Files: 5},
+		{Label: "c", Duration: 100, Cost: 0.03, Commits: 4, Files: 9},
+	}
+	comSvg := string(renderLineChart(cp, "commits"))
+	if !strings.Contains(comSvg, "aria-label=\"commits over time\"") || !strings.Contains(comSvg, "4 commits") {
+		t.Errorf("commits chart wrong: %q", comSvg)
+	}
+	filSvg := string(renderLineChart(cp, "files"))
+	if !strings.Contains(filSvg, "aria-label=\"files over time\"") || !strings.Contains(filSvg, "9 files") {
+		t.Errorf("files chart wrong: %q", filSvg)
+	}
 }
