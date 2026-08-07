@@ -52,6 +52,11 @@ func loadTemplates() *template.Template {
 		"money": func(v float64) string {
 			return fmt.Sprintf("$%.2f", v)
 		},
+		// linechart renders a hand-rolled SVG line chart from []SpeedCostPoint.
+		// mode "speed" plots tick duration (seconds), "cost" plots cost_usd.
+		"linechart": func(pts []SpeedCostPoint, mode string) template.HTML {
+			return renderLineChart(pts, mode)
+		},
 		// sparkline renders a small inline SVG line chart from a []float64 cost
 		// series (w×h viewBox). Empty/zero-series → "—". No external chart lib:
 		// this dashboard is no-CDN/no-build (stdlib Go templates).

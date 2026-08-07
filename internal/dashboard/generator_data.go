@@ -142,6 +142,7 @@ type ProjectDetailData struct {
 	GitReins    GitReinsSummary
 	CompletionAt string
 	ProjectedCost float64
+	SpeedCost   []SpeedCostPoint // for the speed/cost-over-time charts
 }
 
 // BoardStep is one task row from the board, for the roadmap visualization.
@@ -509,6 +510,60 @@ func nextTickIn(running bool, lastTickCompleted string, cooldownS int) string {
 	m := int(wait.Minutes())
 	s := int(wait.Seconds()) % 60
 	return fmt.Sprintf("in %dm %ds", m, s)
+}
+
+// SpeedCostPoint is one completed tick's (time, speed, cost) data point for the
+// per-project speed/cost chart.
+type SpeedCostPoint struct {
+	Label    string // "14:12", "16:44", ...
+	Duration int    // tick duration in seconds (speed)
+	Cost     float64
+}
+
+// speedCostSeries returns the last up-to-n completed ticks for a project,
+// oldest→newest, as (label, durationSecs, cost) points. Used to draw the
+// speed-over-time and cost-over-time charts. Returns nil on error / empty.
+func (g *Generator) speedCostSeries(ctx context.Context, project string, n int) []SpeedCostPoint {
+	rows, err := g.db.QueryContext(ctx, `
+		SELECT spawned_at, completed_at, cost_usd FROM ticks
+		WHERE project_name = ? AND status = 'completed' AND completed_at != ''
+		ORDER BY spawned_at DESC LIMIT ?
+	`, project, n)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	type rev struct {
+		label    string
+		duration int
+		cost     float64
+	}
+	var reversed []rev
+	for rows.Next() {
+		var sp, co string
+		var cost float64
+		if rows.Scan(&sp, &co, &cost) != nil {
+			continue
+		}
+		d := parseDuration(sp, co)
+		if d <= 0 {
+			continue
+		}
+		label := ""
+		if t, err := time.Parse(time.RFC3339, sp); err == nil {
+			label = t.Local().Format("15:04")
+		}
+		reversed = append(reversed, rev{label: label, duration: int(d.Seconds()), cost: cost})
+	}
+	if len(reversed) == 0 {
+		return nil
+	}
+	// Reverse to oldest→newest.
+	out := make([]SpeedCostPoint, 0, len(reversed))
+	for i := len(reversed) - 1; i >= 0; i-- {
+		out = append(out, SpeedCostPoint{Label: reversed[i].label, Duration: reversed[i].duration, Cost: reversed[i].cost})
+	}
+	return out
 }
 
 // recentCostSeries returns the cost_usd of the last up-to-n completed ticks

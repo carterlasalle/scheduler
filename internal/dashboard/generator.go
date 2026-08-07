@@ -140,6 +140,8 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	if project.Workdir != "" {
 		data.GitReins = readGitReins(project.Workdir, 12)
 	}
+	// Speed/cost-over-time chart data (last 20 completed ticks).
+	data.SpeedCost = g.speedCostSeries(ctx, name, 20)
 
 	// Last 20 ticks for the history table.
 	if ticks, err := database.ListTicks(ctx, g.db, name, 20); err == nil {
