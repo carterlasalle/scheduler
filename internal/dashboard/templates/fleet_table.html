@@ -1,15 +1,15 @@
 {{define "fleet_table"}}<tbody id="fleet-overview">
 {{range .Projects}}
 <tr class="{{if not .Enabled}}disabled{{end}}">
-<td><a href="/projects/{{.Name}}" style="color:var(--accent);text-decoration:none">{{.Name}}</a>{{if .RecentFailures}} <span class="fail-flag" title="{{.RecentFailures}} of last {{.RecentTicks}} ticks failed/timed out">●</span>{{end}}</td>
+<td><a href="/projects/{{.Name}}">{{.Name}}</a>{{if .RecentFailures}} <span class="fail-flag" title="{{.RecentFailures}} of last {{.RecentTicks}} ticks failed/timed out">●</span>{{end}}</td>
 <td class="num">{{.Weight}}</td>
 <td class="num">{{.Priority}}</td>
 <td class="meta">{{shortTime .LastTick}}</td>
-<td class="{{if eq .LastOutcome "committed"}}status-ok{{else if eq .LastOutcome "failed"}}status-fail{{else if eq .LastOutcome "timeout"}}status-timeout{{end}}">{{if .LastOutcome}}{{.LastOutcome}}{{else}}—{{end}}</td>
+<td>{{if eq .LastOutcome "committed"}}<span class="pill ok">committed</span>{{else if eq .LastOutcome "failed"}}<span class="pill fail">failed</span>{{else if eq .LastOutcome "timeout"}}<span class="pill warn">timeout</span>{{else}}<span class="meta">—</span>{{end}}</td>
 <td>
 {{if .BoardTotal}}
 <div class="prog"><div class="prog-fill" style="width:{{percent .BoardDone .BoardTotal}}%"></div></div>
-<span class="meta">{{.BoardDone}}/{{.BoardTotal}} · {{percent .BoardDone .BoardTotal}}%</span>
+<span class="meta num">{{.BoardDone}}/{{.BoardTotal}} · {{percent .BoardDone .BoardTotal}}%</span>
 {{else}}
 <span class="meta">—</span>
 {{end}}

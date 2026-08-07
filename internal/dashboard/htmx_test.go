@@ -94,7 +94,6 @@ func TestGenerateProjectDetail_ValidName(t *testing.T) {
 	// Required structural elements.
 	for _, want := range []string{
 		"<!DOCTYPE html>",
-		"Project:",
 		"alpha",
 		"back to fleet",
 		"Weight",

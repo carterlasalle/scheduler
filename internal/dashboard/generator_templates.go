@@ -37,6 +37,9 @@ func loadTemplates() *template.Template {
 		},
 		"add": func(a, b, c int) int { return a + b + c },
 		"sub": func(a, b int) int { return a - b },
+		"duration": func(spawned, completed string) string {
+			return tickDuration(spawned, completed)
+		},
 		// sparkline renders a small inline SVG line chart from a []float64 cost
 		// series (w×h viewBox). Empty/zero-series → "—". No external chart lib:
 		// this dashboard is no-CDN/no-build (stdlib Go templates).

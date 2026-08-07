@@ -25,6 +25,7 @@ type QueueEntry struct {
 
 // QueueData holds all data for the queue page.
 type QueueData struct {
+	Title       string
 	Count       int
 	TotalWeight int
 	Entries     []QueueEntry
@@ -94,6 +95,7 @@ type NamespaceTickRow struct {
 
 // FleetData holds all data for the dashboard.
 type FleetData struct {
+	Title           string
 	GeneratedAt     string
 	BudgetTotal     int
 	BudgetUsed      int
@@ -110,6 +112,7 @@ type FleetData struct {
 
 // ProjectDetailData holds all data for the /projects/{name} page.
 type ProjectDetailData struct {
+	Title       string
 	Project     *database.Project
 	LatestTick  *database.Tick
 	RecentTicks []database.Tick
@@ -120,6 +123,7 @@ type ProjectDetailData struct {
 
 // TickHistoryData holds one page of the global tick history.
 type TickHistoryData struct {
+	Title        string
 	GeneratedAt  string
 	Ticks        []database.Tick
 	Page         int
@@ -135,6 +139,7 @@ type TickHistoryData struct {
 // NamespaceViewData holds namespace configuration, projects, and recent
 // allocation history for /namespaces/{id}.
 type NamespaceViewData struct {
+	Title           string
 	Namespace       *database.Namespace
 	Projects        []database.Project
 	RecentTicks     []database.NamespaceTick
@@ -146,6 +151,7 @@ type NamespaceViewData struct {
 
 // HealthData holds daemon, database, gateway, and DuckBrain liveness info.
 type HealthData struct {
+	Title            string
 	GeneratedAt      string
 	DaemonStatus     string
 	DatabaseStatus   string
@@ -163,6 +169,7 @@ type HealthData struct {
 
 func (g *Generator) collect(ctx context.Context) FleetData {
 	data := FleetData{
+		Title:       "Fleet Overview",
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		BudgetTotal: 100,
 	}
