@@ -22,7 +22,7 @@ import (
 const (
 	defaultProjectWeight    = 10
 	defaultProjectPriority  = 5
-	defaultProjectCooldown  = 900
+	defaultProjectCooldown  = 7200 // 2h baseline (Bane 08-07 3-speed policy) — was 900 (hot default); unpinned projects must not run hot
 	defaultProjectDecayRate = 1.0
 	defaultProjectModel     = "your-model-name"    // agent fills in
 	defaultProjectProvider  = "your-provider-name" // agent fills in

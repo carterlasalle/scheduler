@@ -302,8 +302,8 @@ func TestApplyFleetConfigDefaults(t *testing.T) {
 	if p.Priority != 5 {
 		t.Errorf("default priority: expected 5, got %d", p.Priority)
 	}
-	if p.CooldownS != 900 {
-		t.Errorf("default cooldown: expected 900, got %d", p.CooldownS)
+	if p.CooldownS != 7200 {
+		t.Errorf("default cooldown: expected 7200 (2h baseline per 3-speed policy), got %d", p.CooldownS)
 	}
 	if p.DecayRate != 1.0 {
 		t.Errorf("default decay_rate: expected 1.0, got %f", p.DecayRate)

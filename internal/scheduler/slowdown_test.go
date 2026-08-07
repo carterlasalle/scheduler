@@ -147,43 +147,48 @@ func TestAutoSlowdown_Idle_EscalationChain(t *testing.T) {
 	}
 }
 
-func TestAutoSlowdown_Idle_CapAt86400(t *testing.T) {
+// TestAutoSlowdown_Idle_OperatorSetNotEscalated verifies operator-set
+// cooldowns (>= autoSlowdownMaxCD, the 3-speed pinned tiers) are NEVER
+// escalated by idle verdicts — Bane 08-07 policy: 7200/43200 must hold.
+func TestAutoSlowdown_Idle_OperatorSetNotEscalated(t *testing.T) {
 	tests := []struct {
 		name    string
 		current int
-		want    int
 	}{
-		{"57600→86400 (exactly at cap)", 57600, 86400},
-		{"86400→86400 (already capped, no write)", 86400, 86400},
+		{"57600 (operator-set) unchanged", 57600},
+		{"43200 (completed tier) unchanged", 43200},
+		{"7200 (baseline tier) unchanged", 7200},
+		{"86400 (already capped) unchanged", 86400},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := slowdownTestDB(t)
-			insertSlowdownProject(t, db, "cap_test", tt.current)
+			insertSlowdownProject(t, db, "guard_test", tt.current)
 
 			var buf bytes.Buffer
 			buf.WriteString("IDLE TICK\n")
-			autoSlowdown(db, "cap_test", &buf)
+			autoSlowdown(db, "guard_test", &buf)
 
-			if got := getSlowdownCooldown(t, db, "cap_test"); got != tt.want {
-				t.Errorf("cooldown = %d, want %d", got, tt.want)
+			if got := getSlowdownCooldown(t, db, "guard_test"); got != tt.current {
+				t.Errorf("cooldown = %d, want %d (operator-set must not escalate)", got, tt.current)
 			}
 		})
 	}
 }
 
-// TestAutoSlowdown_Idle_Cooldown57600ToCapped verifies 57600→86400 exactly hits the cap.
-func TestAutoSlowdown_Idle_Cooldown57600ToCapped(t *testing.T) {
+// TestAutoSlowdown_Idle_DynamicBandStillEscalates verifies the <1h dynamic
+// band still auto-slowdowns on idle (escalation is for auto-managed only).
+func TestAutoSlowdown_Idle_DynamicBandStillEscalates(t *testing.T) {
 	db := slowdownTestDB(t)
-	insertSlowdownProject(t, db, "cap_57600", 57600)
+	insertSlowdownProject(t, db, "dyn_test", 600)
 
 	var buf bytes.Buffer
 	buf.WriteString("IDLE TICK\n")
-	autoSlowdown(db, "cap_57600", &buf)
+	autoSlowdown(db, "dyn_test", &buf)
 
-	if got := getSlowdownCooldown(t, db, "cap_57600"); got != 86400 {
-		t.Errorf("cooldown = %d, want 86400 (57600 * 1.5 = 86400, equals cap)", got)
+	if got := getSlowdownCooldown(t, db, "dyn_test"); got != 900 {
+		t.Errorf("cooldown = %d, want 900 (600 * 1.5 in dynamic band)", got)
 	}
 }
 
@@ -388,9 +393,10 @@ func TestAutoSlowdown_AutoBand_ProductiveStillResets(t *testing.T) {
 	}
 }
 
-func TestAutoSlowdown_OperatorSet_IdleStillEscalates(t *testing.T) {
-	// IDLE escalation is allowed at any level: it only increases cooldown,
-	// so it can never clobber operator intent (it pauses MORE, not less).
+func TestAutoSlowdown_OperatorSet_IdleNotEscalated(t *testing.T) {
+	// Operator-set cooldowns (>= autoSlowdownMaxCD) are NEVER escalated by
+	// idle verdicts — Bane 08-07 3-speed policy: 7200/43200 tiers must hold
+	// exactly, or the fleet silently drifts to 10800/64800 "4th tier".
 	db := slowdownTestDB(t)
 	insertSlowdownProject(t, db, "op_idle", 43200)
 
@@ -398,7 +404,7 @@ func TestAutoSlowdown_OperatorSet_IdleStillEscalates(t *testing.T) {
 	buf.WriteString("IDLE TICK\n")
 	autoSlowdown(db, "op_idle", &buf)
 
-	if got := getSlowdownCooldown(t, db, "op_idle"); got != 64800 {
-		t.Errorf("cooldown = %d, want 64800 (43200 * 1.5 — idle escalation still allowed)", got)
+	if got := getSlowdownCooldown(t, db, "op_idle"); got != 43200 {
+		t.Errorf("cooldown = %d, want 43200 (operator-set must not escalate)", got)
 	}
 }

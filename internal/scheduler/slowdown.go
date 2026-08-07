@@ -41,6 +41,13 @@ func autoSlowdown(db *sql.DB, project string, output *bytes.Buffer) {
 		if currentCD == 0 {
 			currentCD = 600
 		}
+		// Operator-set cooldown: never escalate either. Same guard as the
+		// productive branch — 3-speed policy (Bane 08-07) pins 7200/43200 and
+		// idle escalation (×1.5) was silently drifting them to 10800/64800.
+		if currentCD >= autoSlowdownMaxCD {
+			log.Printf("SLOWDOWN: %s cooldown %ds is operator-set (>=%ds) — idle escalation skipped", project, currentCD, autoSlowdownMaxCD)
+			return
+		}
 		// Multiply by 1.5x instead of 2x — gentler escalation.
 		newCD := currentCD + currentCD/2
 		if newCD > 86400 {
