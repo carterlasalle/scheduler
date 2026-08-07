@@ -142,6 +142,7 @@ type ProjectDetailData struct {
 	GitReins    GitReinsSummary
 	CompletionAt string
 	ProjectedCost float64
+	EtaBreakdown string // per-type estimate, e.g. "code ×2 40m + test ×5 25m"
 	SpeedCost   []SpeedCostPoint // for the speed/cost-over-time charts
 }
 

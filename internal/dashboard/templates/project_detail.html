@@ -16,7 +16,7 @@
 {{if .BoardTotal}}
 <div class="card"><div class="label">Board Progress</div><div class="value" style="font-size:1.1rem">{{.BoardDone}}/{{.BoardTotal}}</div><div class="sub">{{percent .BoardDone .BoardTotal}}% complete</div></div>
 <div class="card"><div class="label">Steps Left</div><div class="value">{{sub .BoardTotal .BoardDone}}</div></div>
-<div class="card"><div class="label">Est. Completion</div><div class="value" style="font-size:1.1rem">{{if .ETA}}{{localtime .CompletionAt}}{{else}}—{{end}}</div><div class="sub">{{if .ETA}}{{.ETA}} to go{{end}}{{if .ProjectedCost}} · ~{{money .ProjectedCost}} projected{{end}}</div></div>
+<div class="card"><div class="label">Est. Completion</div><div class="value" style="font-size:1.1rem">{{if .ETA}}{{localtime .CompletionAt}}{{else}}—{{end}}</div><div class="sub">{{if .ETA}}{{.ETA}} to go{{end}}{{if .EtaBreakdown}}<br><span class="mono" style="opacity:.8">{{.EtaBreakdown}}</span>{{end}}{{if .ProjectedCost}} · ~{{money .ProjectedCost}} projected{{end}}</div></div>
 {{end}}
 </div>
 
