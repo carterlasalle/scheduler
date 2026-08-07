@@ -435,8 +435,8 @@ func TestWorkerDefaults_BothSet(t *testing.T) {
 	if !containsStr(result, "gpt-5.6-sol") || !containsStr(result, "openai-codex") {
 		t.Errorf("result missing model or provider: %q", result)
 	}
-	if !containsStr(result, "if available") || !containsStr(result, "Feel free to use a different model") {
-		t.Errorf("result missing fallback language: %q", result)
+	if !containsStr(result, "AUTHORITATIVE, do not change") || !containsStr(result, "precedence") {
+		t.Errorf("result missing authoritative language: %q", result)
 	}
 }
 

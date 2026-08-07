@@ -160,8 +160,9 @@ func WorkerDefaults(project PackedProject) string {
 		p = "(no default)"
 	}
 	return fmt.Sprintf(
-		"Worker default: use model %s with provider %s if available. "+
-			"Feel free to use a different model if this one is unavailable or rate-limited. ",
+		"Worker model/provider (AUTHORITATIVE, do not change): use model %s with provider %s. "+
+			"The board's model column is an advisory routing suggestion only; the configured worker_model here takes precedence and MUST be used for every worker you dispatch. "+
+			"Only switch models if this one errors with an actual unavailable/rate-limited failure — do not second-guess based on the board's recommendation. ",
 		m, p,
 	)
 }
@@ -208,10 +209,20 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				"Load skills coding-hermes-board, coding-hermes-model-router, coding-hermes-never-done, coding-hermes-specs, coding-hermes-testing, coding-hermes-middle-out, systematic-debugging, trust-but-verify, reality-validation, github-pr-workflow, github-repo-management, claude-design, popular-web-designs, hilo, gitreins-usage. "+
 				"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
 				"Workdir: %s. "+
-				"IMPORTANT: You are a FOREMAN, not a worker. Browser/interactive work belongs in workers (delegate). "+
+				"IMPORTANT — worker dispatch: You are the FOREMAN. You pick ONE board task, then dispatch a WORKER to implement it. "+
+				"Do NOT implement complex tasks yourself. To dispatch a worker, run a BACKGROUND process via your terminal tool: "+
+				"`hermes chat -q \"<task brief from the board, plus files-to-modify and acceptance criteria>\" -m <worker_model> --provider <worker_provider> -s coding-hermes-worker --ignore-rules -Q` "+
+				"(terminal background=true). The worker shares this same workdir, so it edits files and commits directly. "+
+				"Then poll the background process until it exits, verify build/lint/test and the commit landed, update the board, and report. "+
+				"Only implement trivial one-file changes yourself; anything multi-file or architectural goes to a worker. "+
+				"Worker model/provider: %s. "+
+				"MANDATORY GitReins lifecycle — do not skip: (1) BEFORE any implementation, run `gitreins task create <TASK-ID> \"<title>\" \"<criterion>\"` then `gitreins task start <TASK-ID>` for the board task you picked. "+
+				"(2) AFTER the worker commits the work (verify the commit exists in git log), ALWAYS run `gitreins task complete <TASK-ID>` — this fires the Tier 2 LLM judge and writes verdict.json. "+
+				"NEVER end a tick without running `gitreins task complete` for the picked task — even if the tick is near its timeout, complete the gitreins task FIRST, then update the board. "+
+				"(3) Then delete the gitreins task with `gitreins task delete <TASK-ID>` to keep tasks.yaml clean. "+
+				"If the worker committed but you missed the gitreins lifecycle, run `gitreins task complete` on the committed work before finishing. "+
+				"MANDATORY CI-health check — do not skip: run `gh run list --repo <org>/<repo> --limit 3 --json status,conclusion,displayTitle,headBranch,createdAt` (derive org/repo from `git remote -v` — the on-disk folder name may not match the GitHub org). If ANY recent run shows conclusion=failure that YOU did not just create, file a board task for the broken CI (e.g. INT-CI-<n> '<what failed>') before ending the tick, so it does not rot. Report CI health (green or the failure you flagged) in your output. "+
 				"Format your final output as clean, well-structured markdown with tables and sections. "+
-				"After completing a task, follow the gitreins task lifecycle (create/complete/delete) so the LLM judge evaluates real code. "+
-				"%s"+
 				"Report result.",
 			tickID, project.Workdir,
 			WorkerDefaults(project),
