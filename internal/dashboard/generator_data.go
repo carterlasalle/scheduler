@@ -1,9 +1,13 @@
 package dashboard
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/coding-herms/scheduler/internal/database"
@@ -42,6 +46,13 @@ type FleetRow struct {
 	Timeout     int
 	CostToday   float64
 	CostWeek    float64
+	// Board progress (parsed from <workdir>/.coding-hermes/tasks.md).
+	Workdir          string
+	CooldownS        int
+	LastTickCompleted string
+	BoardDone        int
+	BoardTotal       int
+	NextTickIn       string // human-readable "in Xm Ys", "running", "due now", or "—"
 }
 
 // TickRow is one tick in the history table.
@@ -96,6 +107,9 @@ type ProjectDetailData struct {
 	Project     *database.Project
 	LatestTick  *database.Tick
 	RecentTicks []database.Tick
+	BoardDone   int
+	BoardTotal  int
+	NextTickIn  string
 }
 
 // TickHistoryData holds one page of the global tick history.
@@ -155,6 +169,9 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	projectQuery := `
 		SELECT
 			p.name, p.weight, p.priority, p.enabled,
+			COALESCE(p.workdir, '')            AS workdir,
+			COALESCE(p.cooldown_s, 900)        AS cooldown_s,
+			COALESCE(p.last_tick_completed, '') AS last_tick_completed,
 			COALESCE(t.spawned_at, '')            AS last_tick,
 			COALESCE(t2.outcome, '')               AS last_outcome,
 			COALESCE(t2.session_id, '')            AS session_id,
@@ -190,6 +207,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		for rows.Next() {
 			var r FleetRow
 			if err := rows.Scan(&r.Name, &r.Weight, &r.Priority, &r.Enabled,
+				&r.Workdir, &r.CooldownS, &r.LastTickCompleted,
 				&r.LastTick, &r.LastOutcome, &r.SessionID,
 				&r.RunningNow, &r.Completed, &r.Failed, &r.Timeout,
 				&r.CostToday, &r.CostWeek); err != nil {
@@ -206,6 +224,12 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 					r.Urgency = float64(r.Priority) * (1 + time.Since(t).Hours())
 				}
 			}
+			// Board progress (done/total) from the project's tasks.md, plus the
+			// human-readable countdown to the next tick.
+			if r.Workdir != "" {
+				r.BoardDone, r.BoardTotal = readBoardProgress(filepath.Join(r.Workdir, ".coding-hermes", "tasks.md"))
+			}
+			r.NextTickIn = nextTickIn(r.RunningNow == 1, r.LastTickCompleted, r.CooldownS)
 			data.CostTodayTotal += r.CostToday
 			data.CostWeekTotal += r.CostWeek
 			data.Projects = append(data.Projects, r)
@@ -329,4 +353,78 @@ ORDER BY spawned_at DESC LIMIT 1`
 	t.Status = database.TickStatus(status)
 	t.Outcome = database.TickOutcome(outcome)
 	return &t, nil
+}
+
+// readBoardProgress counts task rows in a coding-hermes board file. It
+// returns (done, total). Board format (model-router matrix):
+//
+//	## Active          → table rows "| T06 | ..." are PENDING tasks
+//	## Completed       → table rows "| T05 | ..." are DONE tasks
+//	## [ ] NEVER-DONE  → perpetual audit; NOT counted (never completes)
+//
+// A task row is any line starting with "| T" (or "| T00"-style task id) inside
+// the Active or Completed section. Returns (0,0) if the board is missing or
+// unreadable, so the dashboard degrades gracefully.
+func readBoardProgress(path string) (done, total int) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0
+	}
+	defer f.Close()
+
+	section := "" // "active" | "completed" | other
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		switch {
+		case strings.HasPrefix(line, "## "):
+			low := strings.ToLower(line)
+			switch {
+			case strings.Contains(low, "active"):
+				section = "active"
+			case strings.Contains(low, "completed"):
+				section = "completed"
+			default:
+				// NEVER-DONE or any other section — not counted.
+				section = "other"
+			}
+		case strings.HasPrefix(line, "| T"):
+			// Task row. The NEVER-DONE line ("## [ ] NEVER-DONE") is a heading,
+			// not a table row, so it never reaches here.
+			if section == "active" {
+				total++
+			} else if section == "completed" {
+				done++
+				total++
+			}
+		}
+	}
+	return done, total
+}
+
+// nextTickIn returns a human-readable countdown to the next tick, or a
+// status string. running=true means a tick is in flight now. Otherwise the
+// next tick is due cooldownS after the last tick completed.
+func nextTickIn(running bool, lastTickCompleted string, cooldownS int) string {
+	if running {
+		return "running"
+	}
+	if cooldownS <= 0 {
+		cooldownS = 900
+	}
+	if lastTickCompleted == "" {
+		return "—"
+	}
+	t, err := time.Parse(time.RFC3339, lastTickCompleted)
+	if err != nil {
+		return "—"
+	}
+	due := t.Add(time.Duration(cooldownS) * time.Second)
+	wait := time.Until(due)
+	if wait <= 0 {
+		return "due now"
+	}
+	m := int(wait.Minutes())
+	s := int(wait.Seconds()) % 60
+	return fmt.Sprintf("in %dm %ds", m, s)
 }

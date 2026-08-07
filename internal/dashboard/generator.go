@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -118,10 +119,18 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 
 	data := ProjectDetailData{Project: project}
 
-	// Latest tick for this project (single-row fetch).
+	// Board progress + next-tick timing from the project workdir/cooldown.
+	if project.Workdir != "" {
+		data.BoardDone, data.BoardTotal = readBoardProgress(filepath.Join(project.Workdir, ".coding-hermes", "tasks.md"))
+	}
+	running := false
+	var lastCompleted string
+	_ = g.db.QueryRowContext(ctx, `SELECT COALESCE(last_tick_completed, '') FROM projects WHERE name = ?`, name).Scan(&lastCompleted)
 	if latest, err := latestTickForProject(ctx, g.db, name); err == nil {
 		data.LatestTick = latest
+		running = latest != nil && latest.Status == database.StatusRunning
 	}
+	data.NextTickIn = nextTickIn(running, lastCompleted, project.CooldownS)
 
 	// Last 20 ticks for the history table.
 	if ticks, err := database.ListTicks(ctx, g.db, name, 20); err == nil {
@@ -386,6 +395,8 @@ h1{font-size:1.5rem;margin-bottom:4px}h2{font-size:1.1rem;margin:24px 0 8px}
 .card .value{font-size:1.5rem;font-weight:600;margin-top:4px}
 .budget-bar{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px}
 .budget-fill{height:8px;background:linear-gradient(90deg,var(--green),var(--yellow),var(--red));border-radius:4px;margin-top:4px;transition:width .3s}
+.prog{background:var(--border);border-radius:4px;height:6px;width:90px;margin-bottom:3px;overflow:hidden}
+.prog-fill{height:6px;background:var(--accent);border-radius:4px;transition:width .3s}
 .budget-label{display:flex;justify-content:space-between;font-size:0.8rem;margin-top:4px;color:var(--muted)}
 table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:0.85rem}
 th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}
@@ -428,7 +439,7 @@ tr:last-child td{border-bottom:none}
 
 <h2>Projects</h2>
 <table>
-<thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Running</th></tr></thead>
+<thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Progress</th><th>Steps Left</th><th>Next Tick</th><th>Running</th></tr></thead>
 <tbody id="fleet-overview"
 hx-get="/dashboard/partial"
 hx-trigger="every 10s"
@@ -440,6 +451,16 @@ hx-swap="innerHTML">
 <td>{{.Priority}}</td>
 <td class="meta">{{shortTime .LastTick}}</td>
 <td class="{{if eq .LastOutcome "committed"}}status-ok{{else if eq .LastOutcome "failed"}}status-fail{{end}}">{{.LastOutcome}}</td>
+<td>
+{{if .BoardTotal}}
+<div class="prog"><div class="prog-fill" style="width:{{percent .BoardDone .BoardTotal}}%"></div></div>
+<span class="meta">{{.BoardDone}}/{{.BoardTotal}} · {{percent .BoardDone .BoardTotal}}%</span>
+{{else}}
+<span class="meta">—</span>
+{{end}}
+</td>
+<td>{{if .BoardTotal}}<span class="meta">{{sub .BoardTotal .BoardDone}} left</span>{{else}}<span class="meta">—</span>{{end}}</td>
+<td class="{{if eq .NextTickIn "running"}}status-running{{else if eq .NextTickIn "due now"}}status-fail{{end}}">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</td>
 <td>{{if .RunningNow}}<span class="running-dot"></span>running{{end}}</td>
 </tr>{{end}}
 </tbody>

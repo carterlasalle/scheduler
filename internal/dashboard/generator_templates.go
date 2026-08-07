@@ -35,6 +35,7 @@ func loadTemplates() *template.Template {
 			return s
 		},
 		"add": func(a, b, c int) int { return a + b + c },
+		"sub": func(a, b int) int { return a - b },
 		"statusClass": func(s string) string {
 			switch s {
 			case "completed":

@@ -41,6 +41,11 @@ tr:last-child td{border-bottom:none}
 <div class="card"><div class="label">Priority</div><div class="value">{{.Project.Priority}}</div></div>
 <div class="card"><div class="label">Cooldown</div><div class="value">{{.Project.CooldownS}}s</div></div>
 <div class="card"><div class="label">Enabled</div><div class="value">{{if .Project.Enabled}}<span class="status-ok">yes</span>{{else}}<span class="status-fail">no</span>{{end}}</div></div>
+{{if .BoardDone}}{{if .BoardTotal}}
+<div class="card"><div class="label">Board Progress</div><div class="value" style="font-size:1rem">{{.BoardDone}}/{{.BoardTotal}} ({{percent .BoardDone .BoardTotal}}%)</div></div>
+<div class="card"><div class="label">Steps Left</div><div class="value">{{sub .BoardTotal .BoardDone}} left</div></div>
+{{end}}{{end}}
+<div class="card"><div class="label">Next Tick</div><div class="value" style="font-size:1rem">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</div></div>
 </div>
 
 <h2>Latest Tick</h2>

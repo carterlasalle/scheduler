@@ -6,6 +6,16 @@
 <td>{{.Priority}}</td>
 <td class="meta">{{shortTime .LastTick}}</td>
 <td class="{{if eq .LastOutcome "committed"}}status-ok{{else if eq .LastOutcome "failed"}}status-fail{{end}}">{{.LastOutcome}}</td>
+<td>
+{{if .BoardTotal}}
+<div class="prog"><div class="prog-fill" style="width:{{percent .BoardDone .BoardTotal}}%"></div></div>
+<span class="meta">{{.BoardDone}}/{{.BoardTotal}} · {{percent .BoardDone .BoardTotal}}%</span>
+{{else}}
+<span class="meta">—</span>
+{{end}}
+</td>
+<td>{{if .BoardTotal}}<span class="meta">{{sub .BoardTotal .BoardDone}} left</span>{{else}}<span class="meta">—</span>{{end}}</td>
+<td class="{{if eq .NextTickIn "running"}}status-running{{else if eq .NextTickIn "due now"}}status-fail{{end}}">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</td>
 <td>{{if .RunningNow}}<span class="running-dot"></span>running{{end}}</td>
 </tr>{{end}}
 </tbody>{{end}}
