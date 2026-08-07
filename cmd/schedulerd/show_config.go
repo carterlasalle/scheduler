@@ -28,11 +28,11 @@ func printSchema() {
     "scheduler": {
       "type": "object",
       "properties": {
-        "min_interval":   { "type": "string", "default": "20m", "env": "SCHEDULER_MIN_INTERVAL", "cli": "--min-interval" },
+        "min_interval":   { "type": "string", "default": "30s", "env": "SCHEDULER_MIN_INTERVAL", "cli": "--min-interval" },
         "max_interval":   { "type": "string", "default": "24h", "env": "SCHEDULER_MAX_INTERVAL", "cli": "--max-interval" },
         "num_levels":     { "type": "integer", "default": 10, "minimum": 1, "env": "SCHEDULER_NUM_LEVELS", "cli": "--num-levels" },
         "weight_budget":  { "type": "integer", "default": 100, "minimum": 1, "env": "SCHEDULER_BUDGET", "cli": "--budget" },
-        "max_concurrent": { "type": "integer", "default": 8, "minimum": 1, "env": "SCHEDULER_MAX_CONCURRENT", "cli": "--max-concurrent" },
+        "max_concurrent": { "type": "integer", "default": 10, "minimum": 1, "env": "SCHEDULER_MAX_CONCURRENT", "cli": "--max-concurrent" },
         "tick_timeout":   { "type": "string", "default": "2h", "env": "SCHEDULER_TICK_TIMEOUT", "cli": "--tick-timeout" },
         "namespace_mode": { "type": "boolean", "default": false, "env": "SCHEDULER_NAMESPACE_MODE", "cli": "--namespace-mode" }
       }
@@ -42,7 +42,8 @@ func printSchema() {
       "properties": {
         "url":          { "type": "string", "default": "http://127.0.0.1:8642", "env": "SCHEDULER_GATEWAY_URL", "cli": "--gateway-url" },
         "key":          { "type": "string", "env": "SCHEDULER_GATEWAY_KEY", "cli": "--gateway-key" },
-        "foreman_home": { "type": "string", "default": "~/.hermes/foreman", "env": "SCHEDULER_FOREMAN_HOME", "cli": "--foreman-home" }
+        "foreman_home": { "type": "string", "default": "~/.hermes/foreman", "env": "SCHEDULER_FOREMAN_HOME", "cli": "--foreman-home" },
+        "no_exec_fallback": { "type": "boolean", "default": true, "cli": "--no-exec-fallback" }
       }
     },
     "duckbrain": {

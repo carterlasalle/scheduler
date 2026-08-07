@@ -16,7 +16,7 @@ Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for pro
 - **Evaluates every 60 seconds** — computes urgency for each project
 - **Packs greedily** — fills a weight budget with the most urgent projects
 - **Spawns foremen via HTTP** — sends prompts to the Hermes gateway API (`POST /v1/responses`) instead of per-process `hermes chat`. Zero subprocess overhead, zero MCP duplication per tick
-- **Falls back gracefully** — if the gateway is unreachable, exec.Command(`hermes`, ...) handles it
+- **Falls back gracefully** — if the gateway is unreachable, exec.Command(`hermes`, ...) handles it. **Note:** exec fallback is DISABLED by default (`--no-exec-fallback` defaults to `true` for safety); pass `--no-exec-fallback=false` to re-enable it.
 - **Tracks outcomes** — every tick is recorded (queued → running → completed/failed)
 - **Exposes control** — REST API, MCP, dashboard, DuckBrain sync
 - **Auto-approves** — scheduler agents send `require_approval: false` via the gateway API, so foremen run autonomously without pausing for user confirmation. User-facing chats (Telegram, Discord) keep approvals enabled.
@@ -207,12 +207,12 @@ How frequently a project runs. Mapped to interval via geometric curve:
 interval = min_interval × (max_interval / min_interval) ^ ((priority-1) / (levels-1))
 ```
 
-| Priority | Interval (min=20m, max=24h) |
+| Priority | Interval (min=30s, max=24h) |
 |----------|----------------------------|
-| 10 | 20 minutes |
-| 8 | 59 minutes |
-| 5 | 5 hours |
-| 3 | 14.8 hours |
+| 10 | 30 seconds |
+| 8 | ~3 minutes |
+| 5 | ~42 minutes |
+| 3 | ~4.1 hours |
 | 1 | 24 hours |
 
 ### Urgency
@@ -237,31 +237,42 @@ Default 900s between successive ticks for the same project.
   -db ~/.hermes/coding-hermes/scheduler.db \
   -foreman-home ~/.hermes/foreman \
   -gateway-url http://127.0.0.1:8642 \
-  -min-interval 20m \
+  -min-interval 30s \
   -max-interval 24h \
   -num-levels 10 \
   -budget 100 \
-  -max-concurrent 8
+  -max-concurrent 10
 ```
 
 ### Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-listen` | `127.0.0.1:9090` | HTTP listen address |
 | `-db` | `~/.hermes/coding-hermes/scheduler.db` | SQLite database path |
-| `-foreman-home` | `~/.hermes/foreman` | HERMES_HOME for foreman sessions |
-| `-gateway-url` | `http://127.0.0.1:8642` | Hermes gateway API URL |
-| `-gateway-key` | `$API_SERVER_KEY` | Hermes gateway API key |
-| `-budget` | `100` | Concurrency weight budget |
-| `-max-concurrent` | `8` | Max concurrent foreman ticks |
-| `-min-interval` | `20m` | Fastest tick interval (priority 10) |
-| `-max-interval` | `24h` | Slowest tick interval (priority 1) |
+| `-listen` | `127.0.0.1:9090` | HTTP listen address |
+| `-min-interval` | `30s` | Fastest tick interval |
+| `-max-interval` | `24h` | Slowest tick interval |
 | `-num-levels` | `10` | Number of priority levels |
-| `-tick-timeout` | `2h` | Maximum tick duration before kill |
-| `-config` | (none) | Path to TOML fleet config file |
+| `-budget` | `100` | Weight budget |
+| `-max-concurrent` | `10` | Max concurrent foremen |
 | `-namespace-mode` | `false` | Enable multi-namespace scheduling |
+| `-tick-timeout` | `2h` | Maximum tick duration before timeout (2h) |
 | `-test-verify` | `0` | Run N-cycle correctness verification and exit |
+| `-duckbrain-ns` | `coding-hermes` | DuckBrain namespace for sync |
+| `-duckbrain-url` | `http://localhost:3000` | DuckBrain HTTP server URL |
+| `-simulate` | `false` | Run in dry-run/simulation mode (no real spawning) |
+| `-sim-success` | `0.85` | Simulated success rate (0.0-1.0) |
+| `-sim-count` | `0` | Generate N simulated ticks and exit (0 = run loop) |
+| `-gateway-url` | `http://127.0.0.1:8642` | Hermes gateway API URL (empty = use exec.Command) |
+| `-gateway-key` | `$API_SERVER_KEY` | Hermes gateway API key |
+| `-no-exec-fallback` | `true` | Disable exec.Command fallback when gateway fails (default true for safety) |
+| `-foreman-home` | `~/.hermes/foreman` | HERMES_HOME path for foreman sessions |
+| `-sim-setup` | `false` | Create test fixture with 14 dry-run projects |
+| `-sim-ticks` | `10` | Number of evaluation ticks to run in sim-setup mode |
+| `-config` | (none) | Path to TOML fleet config file |
+| `-log-file` | `~/.hermes/coding-hermes/scheduler.log` | Path to append structured tick logs (JSON lines); empty disables |
+| `-show-config` | `false` | Print resolved config (CLI + env) as TOML and exit |
+| `-schema` | `false` | Output JSON Schema for schedulerd.toml and exit |
 
 Declarative fleet seeding via TOML: `./bin/schedulerd --config fleet.example.toml`
 
@@ -330,7 +341,7 @@ docs/             # Fleet status, architecture docs
 
 ## Fleet & Skills
 
-See [docs/fleet.md](docs/fleet.md) for current H3 fleet status — 27 projects, thread mappings, cooldowns, skills map, provider rules.
+See [docs/fleet.md](docs/fleet.md) for current fleet status — regenerated from the live API (`python3 docs/regenerate_fleet.py`), with project counts, thread mappings, cooldowns, skills map, provider rules.
 
 Skills are maintained in `~/.hermes/skills/coding-hermes-*/` and loaded by the scheduler per-project.
 

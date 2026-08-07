@@ -1,5 +1,13 @@
 # Coding Hermes System Plan — V2: Observability, Reliability, Value
 
+> **⚠️ STALE NUMBERS — historical plan document.** The fleet figures below
+> (project counts, tick totals, spend) were captured 2026-08-01 and are no
+> longer current. For live fleet state see the regenerated
+> [fleet.md](fleet.md) (`python3 docs/regenerate_fleet.py`) or the live
+> dashboard at `http://127.0.0.1:9090/`. The plan's *design* (logging, value
+> ledger, GitReins judge wiring) remains the reference for the items it
+> covers; treat every number in it as a snapshot, not ground truth.
+
 **Author:** Hermes (Kara's fleet agent) · **Date:** 2026-08-01 · **Status:** 🔥 BANKAI EXECUTION IN PROGRESS — items ✅ below are DONE, rest are queued
 
 ---
