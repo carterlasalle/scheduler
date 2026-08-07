@@ -142,5 +142,19 @@ tbody tr{transition:background 140ms var(--ease-out)}
     requestAnimationFrame(function () { document.body.classList.add('ready'); });
   });
 })();
+// Render all <time class="local" data-utc="..."> in the viewer's local timezone.
+(function () {
+  var fmt = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+  document.querySelectorAll('time.local').forEach(function (el) {
+    var utc = el.getAttribute('data-utc');
+    if (!utc) return;
+    var d = new Date(utc);
+    if (isNaN(d.getTime())) return;
+    el.textContent = fmt.format(d);
+  });
+})();
 </script>
 {{end}}

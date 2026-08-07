@@ -40,6 +40,18 @@ func loadTemplates() *template.Template {
 		"duration": func(spawned, completed string) string {
 			return tickDuration(spawned, completed)
 		},
+		// localtime renders a UTC RFC3339 timestamp as a <time> element with a
+		// data-utc attribute; the page's JS converts it to the viewer's local
+		// timezone (the server can't know where each person connects from).
+		"localtime": func(utc string) template.HTML {
+			if utc == "" {
+				return "—"
+			}
+			return template.HTML(fmt.Sprintf(`<time class="local" data-utc="%s">…</time>`, template.HTMLEscapeString(utc)))
+		},
+		"money": func(v float64) string {
+			return fmt.Sprintf("$%.2f", v)
+		},
 		// sparkline renders a small inline SVG line chart from a []float64 cost
 		// series (w×h viewBox). Empty/zero-series → "—". No external chart lib:
 		// this dashboard is no-CDN/no-build (stdlib Go templates).

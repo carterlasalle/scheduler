@@ -66,6 +66,12 @@ type FleetRow struct {
 	AvgTickSecs  int
 	SuccessRate  int // percent
 	ETA          string
+	// CompletionAt is the projected wall-clock completion as RFC3339 (UTC);
+	// the dashboard renders it in the viewer's local timezone via JS.
+	CompletionAt string
+	// ProjectedCost is the estimated remaining cost to finish the board
+	// (avg cost per completed tick × steps remaining).
+	ProjectedCost float64
 	// GitReins LLM-judge verdict pass rate (0-100) over the project history.
 	GitReinsPass int // percent; -1 = no verdicts
 }
@@ -134,6 +140,8 @@ type ProjectDetailData struct {
 	BoardSteps  []BoardStep
 	TickWork    map[string]string // tick id → what it worked on (commit subjects)
 	GitReins    GitReinsSummary
+	CompletionAt string
+	ProjectedCost float64
 }
 
 // BoardStep is one task row from the board, for the roadmap visualization.
@@ -300,7 +308,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		r := &data.Projects[i]
 		r.CostSeries = g.recentCostSeries(ctx, r.Name, 12)
 		r.RecentTicks, r.RecentFailures = g.recentTickHealth(ctx, r.Name, 10)
-		r.AvgTickSecs, r.SuccessRate, r.ETA = g.observabilityStats(ctx, r.Name, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
+		r.AvgTickSecs, r.SuccessRate, r.ETA, r.CompletionAt, r.ProjectedCost = g.observabilityStats(ctx, r.Name, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
 		r.GitReinsPass = -1
 		if r.Workdir != "" {
 			if gr := readGitReins(r.Workdir, 0); gr.Total > 0 {
@@ -576,38 +584,44 @@ func tickDuration(spawned, completed string) string {
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
-// observabilityStats returns (avgTickSecs, successRatePct, eta) for a project
-// over its recent completed ticks. avg is the mean duration of the last N
-// completed ticks (lower-bounded at 60s so a single instant tick can't zero the
-// estimate); successRate is % of last N ticks that completed (vs failed/timeout).
-// eta uses avg duration × remaining board steps (or a plain "—" when the board
-// is complete or there's no duration signal).
-func (g *Generator) observabilityStats(ctx context.Context, project string, boardDone, boardTotal int, recentTicks, recentFailures int) (avgSecs, successPct int, eta string) {
-	// Average duration over up-to-10 completed ticks.
+// observabilityStats returns (avgSecs, successPct, eta, completionAt, projectedCost)
+// for a project over its recent completed ticks.
+//   - avgSecs: mean duration of the last N completed ticks (floored at 60s)
+//   - successPct: % of last N ticks that completed (vs failed/timeout)
+//   - eta: avg duration × remaining board steps ("" when no signal)
+//   - completionAt: UTC RFC3339 of now + eta ("" when no eta)
+//   - projectedCost: avg cost per completed tick × remaining steps
+func (g *Generator) observabilityStats(ctx context.Context, project string, boardDone, boardTotal int, recentTicks, recentFailures int) (avgSecs, successPct int, eta, completionAt string, projectedCost float64) {
+	// Average duration + cost over up-to-10 completed ticks.
 	rows, err := g.db.QueryContext(ctx, `
-		SELECT spawned_at, completed_at FROM ticks
+		SELECT spawned_at, completed_at, cost_usd FROM ticks
 		WHERE project_name = ? AND status = 'completed' AND completed_at != ''
 		ORDER BY spawned_at DESC LIMIT 10
 	`, project)
 	var total time.Duration
+	var totalCost float64
 	var count int
 	if err == nil {
 		for rows.Next() {
 			var sp, co string
-			if rows.Scan(&sp, &co) == nil {
+			var cost float64
+			if rows.Scan(&sp, &co, &cost) == nil {
 				if d := parseDuration(sp, co); d > 0 {
 					total += d
+					totalCost += cost
 					count++
 				}
 			}
 		}
 		_ = rows.Close()
 	}
+	var avgCost float64
 	if count > 0 {
 		avgSecs = int(total.Seconds() / float64(count))
 		if avgSecs < 60 {
 			avgSecs = 60 // floor so ETA isn't absurdly short
 		}
+		avgCost = totalCost / float64(count)
 	}
 
 	// Success rate over the last N ticks (recentTicks = total, recentFailures = bad).
@@ -615,15 +629,23 @@ func (g *Generator) observabilityStats(ctx context.Context, project string, boar
 		successPct = (recentTicks - recentFailures) * 100 / recentTicks
 	}
 
-	// ETA = avg duration × steps remaining.
-	if avgSecs > 0 && boardTotal > 0 {
-		remaining := boardTotal - boardDone
-		if remaining > 0 {
+	// ETA + completion timestamp + projected cost from steps remaining.
+	remaining := 0
+	if boardTotal > 0 {
+		remaining = boardTotal - boardDone
+	}
+	if remaining > 0 {
+		if avgSecs > 0 {
 			// avgSecs is in seconds; convert to a Duration properly.
-			eta = formatETA(time.Duration(avgSecs) * time.Second * time.Duration(remaining))
+			d := time.Duration(avgSecs) * time.Second * time.Duration(remaining)
+			eta = formatETA(d)
+			completionAt = time.Now().UTC().Add(d).Format(time.RFC3339)
+		}
+		if avgCost > 0 {
+			projectedCost = avgCost * float64(remaining)
 		}
 	}
-	return avgSecs, successPct, eta
+	return avgSecs, successPct, eta, completionAt, projectedCost
 }
 
 func parseDuration(spawned, completed string) time.Duration {
