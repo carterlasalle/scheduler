@@ -758,3 +758,26 @@ tasks:
   status: complete
   created_at: '2026-08-07T19:59:23.872488+00:00'
   completed_at: '2026-08-07T19:59:28.544982+00:00'
+- id: SCHED-GAP-006
+  title: Expose last_tick_started/last_tick_completed in /api/v1/projects payloads
+  criteria:
+  - GET /api/v1/projects (list) returns each project with a last_tick_started key
+    carrying the RFC3339 timestamp of the most recent tick spawn (exact value written
+    by internal/scheduler/spawn.go), and a last_tick_completed key with the most recent
+    completion timestamp
+  - A never-ticked project (created via POST /api/v1/projects, no ticks) emits BOTH
+    keys with value empty string (key present, not null)
+  - internal/database/models.go Project struct has LastTickStarted and LastTickCompleted
+    fields with snake_case json tags (last_tick_started, last_tick_completed)
+  - GetProject, ListProjects, and ListProjectsByNamespace in internal/database/projects.go
+    SELECT and Scan the last_tick_started and last_tick_completed columns (COALESCE
+    non-null)
+  - internal/api/server_test.go contains TestAPI_ListProjects_LastTickStarted asserting
+    exact timestamps round-trip on both list and single-project endpoints
+  - TestConformance_WireFormat_Projects includes last_tick_started and last_tick_completed
+    in its required snake_case key set
+  - specs/S06-rest-api.md Project schema and examples document last_tick_started and
+    last_tick_completed
+  status: complete
+  created_at: '2026-08-07T22:13:05.770515+00:00'
+  completed_at: '2026-08-07T22:13:34.234985+00:00'
