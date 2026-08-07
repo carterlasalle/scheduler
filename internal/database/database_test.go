@@ -307,6 +307,48 @@ func TestCreateProject_CheckConstraintPriority(t *testing.T) {
 	}
 }
 
+// TestCreateProject_CaseInsensitiveNameDuplicate verifies that creating a
+// project whose name differs only in case from an ENABLED project is rejected
+// (SCHED-GAP-005). The two must not coexist or the daemon will split ticks
+// between them unpredictably.
+func TestCreateProject_CaseInsensitiveNameDuplicate(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	// "heading" is enabled (sampleProject sets Enabled: true).
+	if err := CreateProject(ctx, db, sampleProject("heading")); err != nil {
+		t.Fatalf("CreateProject heading: %v", err)
+	}
+	// Case-variant name, different workdir so only the name guard triggers.
+	dup := sampleProject("HEADING")
+	dup.Workdir = "/tmp/work/HEADING-other"
+	err := CreateProject(ctx, db, dup)
+	if err == nil {
+		t.Fatal("expected case-insensitive duplicate name error, got nil")
+	}
+	if !strings.Contains(err.Error(), "already registered by enabled project") {
+		t.Errorf("error = %q, want 'already registered by enabled project'", err.Error())
+	}
+}
+
+// TestCreateProject_CaseInsensitiveNameDisabledOK verifies that a disabled
+// (archived) project with the same lowercase name does NOT block creation —
+// an archived entry is harmless, mirroring the workdir check's semantics.
+func TestCreateProject_CaseInsensitiveNameDisabledOK(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	archived := sampleProject("speclang")
+	archived.Enabled = false
+	if err := CreateProject(ctx, db, archived); err != nil {
+		t.Fatalf("CreateProject archived speclang: %v", err)
+	}
+	// Canonical enabled registration with a case-variant name + different workdir.
+	canonical := sampleProject("SpecLang")
+	canonical.Workdir = "/tmp/work/speclang-canonical"
+	if err := CreateProject(ctx, db, canonical); err != nil {
+		t.Fatalf("CreateProject canonical SpecLang (disabled dup exists): %v", err)
+	}
+}
+
 // --- Tick lifecycle tests -------------------------------------------------
 
 func TestCreateTick_AndGet(t *testing.T) {

@@ -49,6 +49,25 @@ func CreateProject(ctx context.Context, db *sql.DB, p *Project) error {
 			return fmt.Errorf("create project %q: duplicate workdir check: %w", p.Name, err)
 		}
 	}
+	// Case-insensitive name uniqueness — prevents ghost duplicate projects
+	// (e.g. "heading" vs "HEADING") that SQLite's case-sensitive TEXT PRIMARY
+	// KEY would otherwise allow. Refuse at creation when the existing project
+	// is ENABLED; a disabled duplicate is harmless (archived entry). Mirrors
+	// the workdir check above.
+	if p.Name != "" {
+		var existingName string
+		var existingNameEnabled int
+		err := db.QueryRowContext(ctx,
+			`SELECT name, enabled FROM projects WHERE LOWER(name) = LOWER(?) LIMIT 1`,
+			p.Name).Scan(&existingName, &existingNameEnabled)
+		if err == nil && existingNameEnabled == 1 {
+			return fmt.Errorf("create project %q: name %q already registered by enabled project %q (case-insensitive duplicate)",
+				p.Name, p.Name, existingName)
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("create project %q: duplicate name check: %w", p.Name, err)
+		}
+	}
 	const q = `INSERT INTO projects
 (name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`

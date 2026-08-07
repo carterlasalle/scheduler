@@ -114,6 +114,65 @@ func TestConformance_CreateProject_DuplicateWorkdir(t *testing.T) {
 	}
 }
 
+// TestConformance_CreateProject_CaseInsensitiveDuplicateName (SCHED-GAP-005)
+// verifies that a case-variant project name is rejected with 409 when an
+// enabled project with the same lowercase name exists. The workdir is
+// deliberately different to isolate the name guard from the workdir guard.
+func TestConformance_CreateProject_CaseInsensitiveDuplicateName(t *testing.T) {
+	a := newAPITestServer(t)
+	// POST creates the project disabled; flip it enabled via the resume route.
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "casealpha",
+		"repo_url": "https://example.com/casealpha",
+		"workdir":  "/tmp/casealpha",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create casealpha status = %d, want 201: %v", status, resp)
+	}
+	if status, resp = a.do(t, "POST", "/api/v1/projects/casealpha/resume", nil); status != http.StatusOK {
+		t.Fatalf("resume casealpha status = %d, want 200: %v", status, resp)
+	}
+
+	// Case-variant name with a DIFFERENT workdir → name guard must trigger.
+	status, resp = a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "CASEALPHA",
+		"repo_url": "https://example.com/casealpha-dup",
+		"workdir":  "/tmp/casealpha-dup",
+	})
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "already registered by enabled project") {
+		t.Errorf("error = %q, want the case-insensitive name guard message", msg)
+	}
+}
+
+// TestConformance_CreateProject_CaseInsensitiveNameDisabledOK (SCHED-GAP-005)
+// verifies that a case-variant name is ALLOWED when the existing project is
+// disabled (archived) — a disabled duplicate must not block registration.
+func TestConformance_CreateProject_CaseInsensitiveNameDisabledOK(t *testing.T) {
+	a := newAPITestServer(t)
+	// First project created disabled (POST never auto-enables).
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "casebeta",
+		"repo_url": "https://example.com/casebeta",
+		"workdir":  "/tmp/casebeta",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create casebeta status = %d, want 201: %v", status, resp)
+	}
+	// Case-variant name with a different workdir → allowed (existing is disabled).
+	status, resp = a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "CASEBETA",
+		"repo_url": "https://example.com/casebeta-dup",
+		"workdir":  "/tmp/casebeta-dup",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (disabled dup must not block): %v", status, resp)
+	}
+}
+
 // TestConformance_CreateProject_InvalidWeight verifies out-of-range weight
 // maps to 400 with an actionable message, not 500.
 func TestConformance_CreateProject_InvalidWeight(t *testing.T) {
