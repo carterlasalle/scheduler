@@ -730,3 +730,14 @@ tasks:
   status: complete
   created_at: '2026-08-06T21:02:06.070635+00:00'
   completed_at: '2026-08-06T21:29:03.726630+00:00'
+- id: SCHED-GAP-003
+  title: Schema defaults align with main.go flag defaults
+  criteria:
+  - go run ./cmd/schedulerd --schema outputs scheduler.min_interval default 30s
+  - go run ./cmd/schedulerd --schema outputs scheduler.max_concurrent default 10
+  - go run ./cmd/schedulerd --schema has gateway.no_exec_fallback boolean property
+  - go build ./... compiles cleanly
+  - go test -short -p 1 ./... all packages pass
+  status: complete
+  created_at: '2026-08-07T13:27:58.929767+00:00'
+  completed_at: '2026-08-07T13:28:04.091166+00:00'
