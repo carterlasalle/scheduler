@@ -53,12 +53,18 @@ type FleetRow struct {
 	BoardDone        int
 	BoardTotal       int
 	NextTickIn       string // human-readable "in Xm Ys", "running", "due now", or "—"
+	// Recent cost series (last up-to-N completed ticks, oldest→newest) for the
+	// cost sparkline, plus the count of recent failed/timeout ticks (failure flag).
+	CostSeries      []float64
+	RecentFailures  int
+	RecentTicks     int
 }
 
 // TickRow is one tick in the history table.
 type TickRow struct {
 	ID, Project, Status, Outcome, SessionID, SpawnedAt, CompletedAt string
 	Commits, FilesChanged                                           int
+	Duration string // human-readable elapsed time between spawned and completed
 }
 
 // NamespaceRow is one namespace in the allocation overview table.
@@ -236,6 +242,16 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		}
 	}
 
+	// Second pass for cost sparklines + recent failure flags. Done AFTER the
+	// project rows cursor is fully closed — the modernc.org/sqlite driver
+	// deadlocks if we open nested queries on the same connection while a rows
+	// cursor is still open (the collect() N+1 warning).
+	for i := range data.Projects {
+		r := &data.Projects[i]
+		r.CostSeries = g.recentCostSeries(ctx, r.Name, 12)
+		r.RecentTicks, r.RecentFailures = g.recentTickHealth(ctx, r.Name, 10)
+	}
+
 	// Active ticks count.
 	_ = g.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM ticks WHERE status='running'`).Scan(&data.ActiveTicks)
 
@@ -246,6 +262,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		for tickRows.Next() {
 			var t TickRow
 			_ = tickRows.Scan(&t.ID, &t.Project, &t.Status, &t.Outcome, &t.SessionID, &t.SpawnedAt, &t.CompletedAt, &t.Commits, &t.FilesChanged)
+			t.Duration = tickDuration(t.SpawnedAt, t.CompletedAt)
 			data.RecentTicks = append(data.RecentTicks, t)
 		}
 	}
@@ -427,4 +444,77 @@ func nextTickIn(running bool, lastTickCompleted string, cooldownS int) string {
 	m := int(wait.Minutes())
 	s := int(wait.Seconds()) % 60
 	return fmt.Sprintf("in %dm %ds", m, s)
+}
+
+// recentCostSeries returns the cost_usd of the last up-to-n completed ticks
+// for a project, oldest→newest, for the cost sparkline. Returns nil on error.
+func (g *Generator) recentCostSeries(ctx context.Context, project string, n int) []float64 {
+	rows, err := g.db.QueryContext(ctx, `
+		SELECT cost_usd FROM ticks
+		WHERE project_name = ? AND status = 'completed'
+		ORDER BY spawned_at DESC LIMIT ?
+	`, project, n)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	// Collect newest→oldest, then reverse.
+	rev := []float64{}
+	for rows.Next() {
+		var c float64
+		if rows.Scan(&c) == nil {
+			rev = append(rev, c)
+		}
+	}
+	out := make([]float64, 0, len(rev))
+	for i := len(rev) - 1; i >= 0; i-- {
+		out = append(out, rev[i])
+	}
+	return out
+}
+
+// recentTickHealth returns (totalRecent, failedRecent) for a project over the
+// last n ticks (any status), used for the failure flag. A failedRecent > 0
+// lets the dashboard highlight a project with recent failed/timeout ticks.
+func (g *Generator) recentTickHealth(ctx context.Context, project string, n int) (total, failed int) {
+	rows, err := g.db.QueryContext(ctx, `
+		SELECT status FROM ticks
+		WHERE project_name = ? ORDER BY spawned_at DESC LIMIT ?
+	`, project, n)
+	if err != nil {
+		return 0, 0
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		if rows.Scan(&status) != nil {
+			continue
+		}
+		total++
+		if status == "failed" || status == "timeout" {
+			failed++
+		}
+	}
+	return total, failed
+}
+
+// tickDuration returns the human-readable elapsed time between spawned_at and
+// completed_at, or "" when either is missing (still running / not finished).
+func tickDuration(spawned, completed string) string {
+	if spawned == "" || completed == "" {
+		return ""
+	}
+	s, err1 := time.Parse(time.RFC3339, spawned)
+	c, err2 := time.Parse(time.RFC3339, completed)
+	if err1 != nil || err2 != nil {
+		return ""
+	}
+	d := c.Sub(s)
+	if d < 0 {
+		return ""
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }

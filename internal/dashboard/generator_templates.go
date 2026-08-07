@@ -3,6 +3,7 @@ package dashboard
 import (
 	"fmt"
 	"html/template"
+	"strings"
 )
 
 // mustReadStatic panics if the embedded asset cannot be read at init time —
@@ -36,6 +37,34 @@ func loadTemplates() *template.Template {
 		},
 		"add": func(a, b, c int) int { return a + b + c },
 		"sub": func(a, b int) int { return a - b },
+		// sparkline renders a small inline SVG line chart from a []float64 cost
+		// series (w×h viewBox). Empty/zero-series → "—". No external chart lib:
+		// this dashboard is no-CDN/no-build (stdlib Go templates).
+		"sparkline": func(series []float64) template.HTML {
+			const w, h = 64, 20
+			if len(series) == 0 {
+				return "—"
+			}
+			maxv := series[0]
+			for _, v := range series {
+				if v > maxv {
+					maxv = v
+				}
+			}
+			// Build polyline points.
+			pts := make([]string, 0, len(series))
+			for i, v := range series {
+				x := float64(i) * w / float64(len(series)-1)
+				y := h - 2.0
+				if maxv > 0 {
+					y = h - 2.0 - (v / maxv) * (h - 4.0)
+				}
+				pts = append(pts, fmt.Sprintf("%.1f,%.1f", x, y))
+			}
+			return template.HTML(fmt.Sprintf(
+				`<svg class="spark" width="%d" height="%d" viewBox="0 0 %d %d" aria-hidden="true"><polyline fill="none" stroke="var(--accent)" stroke-width="1.5" points="%s"/></svg>`,
+				w, h, w, h, strings.Join(pts, " ")))
+		},
 		"statusClass": func(s string) string {
 			switch s {
 			case "completed":

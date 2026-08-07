@@ -3,6 +3,7 @@ package dashboard
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -77,5 +78,53 @@ func TestNextTickIn(t *testing.T) {
 	// Last tick completed 20 minutes ago, 900s cooldown → past due.
 	if got := nextTickIn(false, nowRFC3339Offset(-20*60*1e9), 900); got != "due now" {
 		t.Errorf("overdue -> expected 'due now', got %q", got)
+	}
+}
+
+func TestTickDuration(t *testing.T) {
+	if got := tickDuration("", ""); got != "" {
+		t.Errorf("empty -> expected '', got %q", got)
+	}
+	if got := tickDuration("2026-08-06T10:00:00Z", "2026-08-06T10:05:30Z"); got != "5m30s" {
+		t.Errorf("expected 5m30s, got %q", got)
+	}
+	if got := tickDuration("2026-08-06T10:00:00Z", "2026-08-06T10:00:45Z"); got != "45s" {
+		t.Errorf("expected 45s, got %q", got)
+	}
+	// Not finished (no completed_at) → empty.
+	if got := tickDuration("2026-08-06T10:00:00Z", ""); got != "" {
+		t.Errorf("unfinished -> expected '', got %q", got)
+	}
+}
+
+func TestSparklineFunc(t *testing.T) {
+	tmpl := loadTemplates()
+	// Access the registered func map. The template's FuncMap is private; the
+	// reliable check is that a template using {{sparkline .}} executes without
+	// "function not defined" — which happens at parse time, so simply
+	// re-executing the registered template is enough. Instead, verify the func
+	// map contains the key by rendering a tiny template that calls it.
+	mini, err := tmpl.Clone()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mini, err = mini.New("sparkcheck").Parse(`{{sparkline .}}`)
+	if err != nil {
+		t.Fatalf("template referencing sparkline should parse: %v", err)
+	}
+	var buf strings.Builder
+	if err := mini.ExecuteTemplate(&buf, "sparkcheck", []float64{0.03, 0.03, 0.03}); err != nil {
+		t.Fatalf("sparkline exec failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "<svg") || !strings.Contains(buf.String(), "polyline") {
+		t.Errorf("expected svg polyline, got %q", buf.String())
+	}
+	// nil series → em-dash.
+	buf.Reset()
+	if err := mini.ExecuteTemplate(&buf, "sparkcheck", []float64(nil)); err != nil {
+		t.Fatalf("sparkline nil exec failed: %v", err)
+	}
+	if buf.String() != "—" {
+		t.Errorf("nil series -> expected em-dash, got %q", buf.String())
 	}
 }

@@ -384,52 +384,89 @@ const pageTemplate = `<!DOCTYPE html>
 <title>Coding Hermes Fleet</title>
 <script src="/static/htmx.min.js"></script>
 <style>
-:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--muted:#8b949e;--border:#21262d;--card:#161b22}
+:root{
+--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2991d;--muted:#8b949e;--border:#21262d;--card:#161b22;--card2:#1c2128;
+--ease-out:cubic-bezier(0.23,1,0.32,1);--ease-in-out:cubic-bezier(0.77,0,0.175,1);
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--fg);padding:16px;max-width:1200px;margin:0 auto}
-h1{font-size:1.5rem;margin-bottom:4px}h2{font-size:1.1rem;margin:24px 0 8px}
-.meta{color:var(--muted);font-size:0.8rem;margin-bottom:16px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:24px}
-.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
-.card .label{color:var(--muted);font-size:0.75rem;text-transform:uppercase}
-.card .value{font-size:1.5rem;font-weight:600;margin-top:4px}
-.budget-bar{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px}
-.budget-fill{height:8px;background:linear-gradient(90deg,var(--green),var(--yellow),var(--red));border-radius:4px;margin-top:4px;transition:width .3s}
-.prog{background:var(--border);border-radius:4px;height:6px;width:90px;margin-bottom:3px;overflow:hidden}
-.prog-fill{height:6px;background:var(--accent);border-radius:4px;transition:width .3s}
-.budget-label{display:flex;justify-content:space-between;font-size:0.8rem;margin-top:4px;color:var(--muted)}
-table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:0.85rem}
-th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}
-th{background:var(--card);color:var(--muted);font-weight:600;text-transform:uppercase;font-size:0.7rem;position:sticky;top:0}
+html{-webkit-text-size-adjust:100%}
+body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-optical-sizing:auto;background:var(--bg);color:var(--fg);padding:0;margin:0}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1240px;margin:0 auto;padding:16px}
+h1{font-size:1.4rem;letter-spacing:-0.02em;line-height:1.05;margin-bottom:2px}
+h2{font-size:1.05rem;letter-spacing:-0.01em;margin:26px 0 10px}
+.meta{color:var(--muted);font-size:0.8rem}
+header.sticky{position:sticky;top:0;z-index:10;background:rgba(13,17,23,0.72);backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);border-bottom:1px solid var(--border);box-shadow:inset 0 1px 0 rgba(255,255,255,0.04)}
+header .inner{max-width:1240px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.nav{display:flex;gap:4px}
+.nav a{color:var(--muted);font-size:0.85rem;padding:6px 12px;border-radius:8px;transition:color 160ms var(--ease-out),background 160ms var(--ease-out)}
+.nav a:hover{color:var(--fg);background:var(--card2);text-decoration:none}
+.nav a.active{color:var(--accent);background:rgba(88,166,255,0.12)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;opacity:0;transform:translateY(10px);transition:opacity 340ms var(--ease-out),transform 340ms var(--ease-out)}
+body.ready .card{opacity:1;transform:translateY(0)}
+.card:nth-child(2){transition-delay:40ms}.card:nth-child(3){transition-delay:80ms}.card:nth-child(4){transition-delay:120ms}.card:nth-child(5){transition-delay:160ms}.card:nth-child(6){transition-delay:200ms}
+.card .label{color:var(--muted);font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em}
+.card .value{font-size:1.5rem;font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
+.budget-bar{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px}
+.budget-fill{height:8px;background:linear-gradient(90deg,var(--green),var(--yellow),var(--red));border-radius:4px;margin-top:6px;transition:width .3s var(--ease-out)}
+.budget-label{display:flex;justify-content:space-between;font-size:0.8rem;margin-top:6px;color:var(--muted);font-variant-numeric:tabular-nums}
+.prog{background:var(--border);border-radius:4px;height:6px;width:88px;margin-bottom:3px;overflow:hidden}
+.prog-fill{height:6px;background:var(--accent);border-radius:4px;transition:width .3s var(--ease-out)}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;font-size:0.85rem}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--border);vertical-align:middle}
+th{background:var(--card2);color:var(--muted);font-weight:600;text-transform:uppercase;font-size:0.68rem;letter-spacing:0.05em;position:sticky;top:0}
 tr:last-child td{border-bottom:none}
-.status-ok{color:var(--green)}.status-fail{color:var(--red)}.status-running{color:var(--accent);animation:pulse 1.5s infinite}
-.running-dot{display:inline-block;width:6px;height:6px;background:var(--accent);border-radius:50%;margin-right:4px;animation:pulse 1.5s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-.disabled{opacity:0.5}
+tbody tr{transition:background 160ms var(--ease-out)}
+@media(hover:hover) and (pointer:fine){tbody tr:hover{background:var(--card2)}}
+.status-ok{color:var(--green)}.status-fail{color:var(--red)}.status-running{color:var(--accent)}
+.status-timeout{color:var(--yellow)}
+.running-dot{display:inline-block;width:6px;height:6px;background:var(--accent);border-radius:50%;margin-right:5px;animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.35}}
+.flash{animation:flashbg 220ms var(--ease-out)}
+@keyframes flashbg{0%{background:rgba(88,166,255,0.18)}100%{background:transparent}}
+.fail-flag{color:var(--red);font-weight:600}
 .util-green{color:var(--green)}.util-yellow{color:var(--yellow)}.util-red{color:var(--red)}
 .utilization-bar{display:inline-block;height:6px;background:var(--accent);border-radius:3px;margin-right:4px;vertical-align:middle;max-width:60px}
+.disabled{opacity:0.45}
+.spark{display:block;margin-top:2px}
+.num{font-variant-numeric:tabular-nums}
 .htmx-indicator{color:var(--muted);font-size:0.7rem;margin-left:8px;display:none}
 .htmx-request .htmx-indicator{display:inline}
-.nav{display:flex;gap:12px;margin-bottom:20px}
-.nav a{color:var(--accent);text-decoration:none;font-size:0.85rem;padding:4px 8px;border-radius:4px}
-.nav a:hover{text-decoration:underline}.nav a.active{background:var(--accent);color:var(--bg)}
-@media(max-width:600px){table{font-size:0.75rem}th,td{padding:6px 8px}}
+@media(max-width:640px){table{font-size:0.72rem}th,td{padding:6px 8px}header .inner{flex-direction:column;align-items:flex-start}}
+@media (prefers-reduced-motion: reduce){
+  .card{opacity:1;transform:none;transition:none}
+  .running-dot{animation:none}
+}
+@media (prefers-reduced-transparency: reduce){
+  header.sticky{background:var(--bg);backdrop-filter:none;-webkit-backdrop-filter:none}
+}
+@media (prefers-contrast: more){
+  body{background:#000}.card,table,.budget-bar{background:#111;border-color:#444}
+}
 </style>
 </head>
 <body>
+<div id="app">
+<header class="sticky"><div class="inner">
+<a href="/" style="font-weight:700;color:var(--fg);letter-spacing:-0.01em">🚀 Coding Hermes Fleet</a>
 <div class="nav">
-<a href="/" class="active">Fleet Overview</a>
+<a href="/" class="active">Overview</a>
 <a href="/queue">Queue</a>
-<a href="/ticks">Tick History</a>
+<a href="/ticks">Ticks</a>
 <a href="/health">Health</a>
 </div>
-<h1>🚀 Coding Hermes Fleet</h1>
-<div class="meta">Generated {{.GeneratedAt}} · Auto-refresh 60s · Live updates via htmx every 10s</div>
+</div></header>
+<div class="wrap">
+<div class="meta">Generated {{.GeneratedAt}} · auto-refresh 60s · live via htmx 10s</div>
 
 <div class="cards">
 <div class="card"><div class="label">Enabled Projects</div><div class="value">{{.EnabledProjects}}/{{.TotalProjects}}</div></div>
 <div class="card"><div class="label">Active Ticks</div><div class="value">{{.ActiveTicks}}</div></div>
-<div class="card"><div class="label">Budget</div><div class="value">{{.BudgetUsed}}/{{.BudgetTotal}}</div></div>
+<div class="card"><div class="label">Budget Used</div><div class="value">{{.BudgetUsed}}/{{.BudgetTotal}}</div></div>
+{{if .CostTodayTotal}}<div class="card"><div class="label">Cost Today</div><div class="value">${{printf "%.2f" .CostTodayTotal}}</div></div>{{end}}
+{{if .CostWeekTotal}}<div class="card"><div class="label">Cost 7d</div><div class="value">${{printf "%.2f" .CostWeekTotal}}</div></div>{{end}}
 </div>
 
 <div class="budget-bar">
@@ -439,18 +476,18 @@ tr:last-child td{border-bottom:none}
 
 <h2>Projects</h2>
 <table>
-<thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Progress</th><th>Steps Left</th><th>Next Tick</th><th>Running</th></tr></thead>
+<thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Progress</th><th>Steps Left</th><th>Next Tick</th><th>Cost</th><th>Recent</th></tr></thead>
 <tbody id="fleet-overview"
 hx-get="/dashboard/partial"
 hx-trigger="every 10s"
 hx-swap="innerHTML">
 {{range .Projects}}
 <tr class="{{if not .Enabled}}disabled{{end}}">
-<td><a href="/projects/{{.Name}}" style="color:var(--accent);text-decoration:none">{{.Name}}</a></td>
-<td>{{.Weight}}</td>
-<td>{{.Priority}}</td>
+<td><a href="/projects/{{.Name}}" style="color:var(--accent);text-decoration:none">{{.Name}}</a>{{if .RecentFailures}} <span class="fail-flag" title="{{.RecentFailures}} of last {{.RecentTicks}} ticks failed/timed out">●</span>{{end}}</td>
+<td class="num">{{.Weight}}</td>
+<td class="num">{{.Priority}}</td>
 <td class="meta">{{shortTime .LastTick}}</td>
-<td class="{{if eq .LastOutcome "committed"}}status-ok{{else if eq .LastOutcome "failed"}}status-fail{{end}}">{{.LastOutcome}}</td>
+<td class="{{if eq .LastOutcome "committed"}}status-ok{{else if eq .LastOutcome "failed"}}status-fail{{else if eq .LastOutcome "timeout"}}status-timeout{{end}}">{{if .LastOutcome}}{{.LastOutcome}}{{else}}—{{end}}</td>
 <td>
 {{if .BoardTotal}}
 <div class="prog"><div class="prog-fill" style="width:{{percent .BoardDone .BoardTotal}}%"></div></div>
@@ -459,25 +496,27 @@ hx-swap="innerHTML">
 <span class="meta">—</span>
 {{end}}
 </td>
-<td>{{if .BoardTotal}}<span class="meta">{{sub .BoardTotal .BoardDone}} left</span>{{else}}<span class="meta">—</span>{{end}}</td>
+<td>{{if .BoardTotal}}<span class="meta num">{{sub .BoardTotal .BoardDone}} left</span>{{else}}<span class="meta">—</span>{{end}}</td>
 <td class="{{if eq .NextTickIn "running"}}status-running{{else if eq .NextTickIn "due now"}}status-fail{{end}}">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</td>
-<td>{{if .RunningNow}}<span class="running-dot"></span>running{{end}}</td>
+<td class="num">{{if .CostToday}}<span title="today">${{printf "%.3f" .CostToday}}</span>{{else}}<span class="meta">—</span>{{end}}{{if sparkline .CostSeries}}<br>{{sparkline .CostSeries}}{{end}}</td>
+<td class="num">{{if .RecentFailures}}<span class="status-fail">{{.RecentFailures}}/{{.RecentTicks}}</span>{{else if .RecentTicks}}<span class="status-ok">{{.RecentTicks}} ok</span>{{else}}<span class="meta">—</span>{{end}}</td>
 </tr>{{end}}
 </tbody>
 </table>
 
 <h2>Recent Ticks</h2>
 <table>
-<thead><tr><th>Project</th><th>Status</th><th>Outcome</th><th>Spawned</th><th>Commits</th><th>Files</th></tr></thead>
+<thead><tr><th>Project</th><th>Status</th><th>Outcome</th><th>Duration</th><th>Spawned</th><th>Commits</th><th>Files</th></tr></thead>
 <tbody>
 {{range .RecentTicks}}
 <tr>
 <td>{{.Project}}</td>
-<td class="{{if eq .Status "completed"}}status-ok{{else if eq .Status "failed"}}status-fail{{else if eq .Status "running"}}status-running{{end}}">{{.Status}}</td>
-<td>{{.Outcome}}</td>
+<td class="{{if eq .Status "completed"}}status-ok{{else if eq .Status "failed"}}status-fail{{else if eq .Status "timeout"}}status-timeout{{else if eq .Status "running"}}status-running{{end}}">{{.Status}}</td>
+<td>{{if .Outcome}}{{.Outcome}}{{else}}—{{end}}</td>
+<td class="num">{{if .Duration}}{{.Duration}}{{else}}<span class="meta">—</span>{{end}}</td>
 <td class="meta">{{shortTime .SpawnedAt}}</td>
-<td>{{.Commits}}</td>
-<td>{{.FilesChanged}}</td>
+<td class="num">{{.Commits}}</td>
+<td class="num">{{.FilesChanged}}</td>
 </tr>{{end}}
 </tbody>
 </table>
@@ -526,5 +565,19 @@ hx-swap="innerHTML">
 {{else}}
 <p class="meta">No namespace tick data available</p>
 {{end}}
+</div><!-- /wrap -->
+</div><!-- /app -->
+<script>
+// Entrance stagger: add .ready after double-rAF so the stat cards fade/slide
+// in once on first load. Fallback for @starting-style. Never re-runs on the
+// 10s htmx poll (only body.ready once).
+(function () {
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduced) { document.body.classList.add('ready'); return; }
+  requestAnimationFrame(function () {
+    requestAnimationFrame(function () { document.body.classList.add('ready'); });
+  });
+})();
+</script>
 </body>
 </html>`
