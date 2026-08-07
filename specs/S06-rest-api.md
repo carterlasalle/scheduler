@@ -112,7 +112,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ProjectList' }
-              example: { projects: [{ name: alpha, repo_url: 'https://github.com/acme/alpha', workdir: /srv/alpha, weight: 10, priority: 5, cooldown_s: 900, decay_rate: 1.0, model: gpt-5, provider: openai, enabled: true, created_at: '2026-07-12T10:00:00Z', updated_at: '2026-07-12T10:00:00Z' }] }
+              example: { projects: [{ name: alpha, repo_url: 'https://github.com/acme/alpha', workdir: /srv/alpha, weight: 10, priority: 5, cooldown_s: 900, decay_rate: 1.0, model: gpt-5, provider: openai, enabled: true, created_at: '2026-07-12T10:00:00Z', updated_at: '2026-07-12T10:00:00Z', last_tick_started: '2026-07-12T10:00:00Z', last_tick_completed: '2026-07-12T10:04:00Z' }] }
         '500': { $ref: '#/components/responses/InternalError' }
         '405': { $ref: '#/components/responses/GetOrPostOnly' }
     post:
@@ -129,7 +129,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Project' }
-              example: { name: alpha, repo_url: 'https://github.com/acme/alpha', workdir: /srv/alpha, weight: 10, priority: 5, cooldown_s: 900, decay_rate: 1.0, model: gpt-5, provider: openai, enabled: true, created_at: '2026-07-12T10:00:00Z', updated_at: '2026-07-12T10:00:00Z' }
+              example: { name: alpha, repo_url: 'https://github.com/acme/alpha', workdir: /srv/alpha, weight: 10, priority: 5, cooldown_s: 900, decay_rate: 1.0, model: gpt-5, provider: openai, enabled: true, created_at: '2026-07-12T10:00:00Z', updated_at: '2026-07-12T10:00:00Z', last_tick_started: '', last_tick_completed: '' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '409': { $ref: '#/components/responses/Conflict' }
         '500': { $ref: '#/components/responses/InternalError' }
@@ -145,7 +145,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ProjectDetail' }
-              example: { project: { name: alpha, repo_url: 'https://github.com/acme/alpha', workdir: /srv/alpha, weight: 10, priority: 5, cooldown_s: 900, decay_rate: 1.0, model: gpt-5, provider: openai, enabled: true, created_at: '2026-07-12T10:00:00Z', updated_at: '2026-07-12T10:00:00Z' }, latest_tick: null }
+              example: { project: { name: alpha, repo_url: 'https://github.com/acme/alpha', workdir: /srv/alpha, weight: 10, priority: 5, cooldown_s: 900, decay_rate: 1.0, model: gpt-5, provider: openai, enabled: true, created_at: '2026-07-12T10:00:00Z', updated_at: '2026-07-12T10:00:00Z', last_tick_started: '2026-07-12T10:00:00Z', last_tick_completed: '2026-07-12T10:04:00Z' }, latest_tick: null }
         '404': { $ref: '#/components/responses/ProjectNotFound' }
         '500': { $ref: '#/components/responses/InternalError' }
         '405': { $ref: '#/components/responses/ProjectMethods' }
@@ -163,7 +163,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Project' }
-              example: { name: alpha, repo_url: 'https://github.com/acme/alpha', workdir: /srv/alpha, weight: 20, priority: 8, cooldown_s: 900, decay_rate: 1.0, model: gpt-5, provider: openai, enabled: true, created_at: '2026-07-12T10:00:00Z', updated_at: '2026-07-12T10:05:00Z' }
+              example: { name: alpha, repo_url: 'https://github.com/acme/alpha', workdir: /srv/alpha, weight: 20, priority: 8, cooldown_s: 900, decay_rate: 1.0, model: gpt-5, provider: openai, enabled: true, created_at: '2026-07-12T10:00:00Z', updated_at: '2026-07-12T10:05:00Z', last_tick_started: '', last_tick_completed: '' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/ProjectNotFound' }
         '500': { $ref: '#/components/responses/InternalError' }
@@ -302,8 +302,8 @@ components:
     RecentOutcomes: { type: object, required: [completed, failed, timeout], properties: { completed: { type: integer }, failed: { type: integer }, timeout: { type: integer } }, additionalProperties: { type: integer } }
     Project:
       type: object
-      required: [name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, enabled, created_at, updated_at]
-      properties: { name: { type: string }, repo_url: { type: string }, workdir: { type: string }, weight: { type: integer, minimum: 1, maximum: 100, default: 10 }, priority: { type: integer, minimum: 1, maximum: 10, default: 5 }, cooldown_s: { type: integer, default: 900 }, decay_rate: { type: number, format: double, default: 1.0 }, model: { type: string }, provider: { type: string }, enabled: { type: boolean }, created_at: { type: string, format: date-time }, updated_at: { type: string, format: date-time } }
+      required: [name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, enabled, created_at, updated_at, last_tick_started, last_tick_completed]
+      properties: { name: { type: string }, repo_url: { type: string }, workdir: { type: string }, weight: { type: integer, minimum: 1, maximum: 100, default: 10 }, priority: { type: integer, minimum: 1, maximum: 10, default: 5 }, cooldown_s: { type: integer, default: 900 }, decay_rate: { type: number, format: double, default: 1.0 }, model: { type: string }, provider: { type: string }, enabled: { type: boolean }, created_at: { type: string, format: date-time }, updated_at: { type: string, format: date-time }, last_tick_started: { type: string, format: date-time, description: 'RFC3339 of the most recent tick spawn; empty string when never spawned' }, last_tick_completed: { type: string, format: date-time, description: 'RFC3339 of the most recent tick completion (any outcome); empty string when never completed' } }
     ProjectCreate:
       type: object
       required: [name, repo_url, workdir]

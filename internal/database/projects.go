@@ -84,14 +84,14 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 // GetProject loads a single project by name. Returns ErrProjectNotFound if
 // no row matches.
 func GetProject(ctx context.Context, db *sql.DB, name string) (*Project, error) {
-	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures
+	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, '')
 FROM projects WHERE name = ?`
 	var p Project
 	var enabled int
 	var nsID sql.NullString
 	err := db.QueryRowContext(ctx, q, name).Scan(
 		&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-		&p.DecayRate, &p.Model, &p.Provider, &p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures)
+		&p.DecayRate, &p.Model, &p.Provider, &p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, name)
 	}
@@ -108,7 +108,7 @@ FROM projects WHERE name = ?`
 // ListProjects returns projects. If enabledOnly is true, only enabled=1
 // rows are returned. Results are ordered by name for stable output.
 func ListProjects(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, '')
 FROM projects`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -129,7 +129,7 @@ FROM projects`
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 			&p.DecayRate, &p.Model, &p.Provider, &p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled,
-			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures); err != nil {
+			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
 		p.Enabled = enabled != 0
@@ -147,7 +147,7 @@ FROM projects`
 // ListProjectsByNamespace returns all projects assigned to the given namespace,
 // ordered by name. Returns an empty slice if no projects match.
 func ListProjectsByNamespace(ctx context.Context, db *sql.DB, namespaceID string) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, '')
 FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 
 	rows, err := db.QueryContext(ctx, q, namespaceID)
@@ -164,7 +164,7 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 			&p.DecayRate, &p.Model, &p.Provider, &p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled,
-			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures); err != nil {
+			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
 		p.Enabled = enabled != 0

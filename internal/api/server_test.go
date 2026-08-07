@@ -315,6 +315,74 @@ func TestAPI_GetProject_NotFound(t *testing.T) {
 	}
 }
 
+// TestAPI_ListProjects_LastTickStarted (SCHED-GAP-006) verifies that the
+// last_tick_started and last_tick_completed fields are surfaced in the
+// /api/v1/projects payloads. A ticked project must carry the exact
+// timestamps written by the scheduler; a never-ticked project must still
+// emit both keys with value "" (COALESCE keeps them non-NULL).
+func TestAPI_ListProjects_LastTickStarted(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha") // never ticked
+
+	// Stamp a ticked project directly on the DB (mirrors what
+	// internal/scheduler/spawn.go + lifecycle.go would write).
+	if _, err := a.db.Exec(
+		`UPDATE projects SET last_tick_started = ?, last_tick_completed = ? WHERE name = ?`,
+		"2026-08-07T12:00:00Z", "2026-08-07T13:00:00Z", "alpha"); err != nil {
+		t.Fatalf("stamp timestamps: %v", err)
+	}
+
+	// --- list endpoint ---
+	status, body := a.do(t, "GET", "/api/v1/projects", nil)
+	if status != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", status)
+	}
+	projs := body["projects"].([]interface{})
+	if len(projs) != 1 {
+		t.Fatalf("got %d projects, want 1", len(projs))
+	}
+	p := projs[0].(map[string]interface{})
+	if got := p["last_tick_started"]; got != "2026-08-07T12:00:00Z" {
+		t.Errorf("list last_tick_started = %v, want 2026-08-07T12:00:00Z", got)
+	}
+	if got := p["last_tick_completed"]; got != "2026-08-07T13:00:00Z" {
+		t.Errorf("list last_tick_completed = %v, want 2026-08-07T13:00:00Z", got)
+	}
+
+	// --- single-project endpoint ---
+	status, body = a.do(t, "GET", "/api/v1/projects/alpha", nil)
+	if status != http.StatusOK {
+		t.Fatalf("get status = %d, want 200", status)
+	}
+	p = body["project"].(map[string]interface{})
+	if got := p["last_tick_started"]; got != "2026-08-07T12:00:00Z" {
+		t.Errorf("get last_tick_started = %v, want 2026-08-07T12:00:00Z", got)
+	}
+	if got := p["last_tick_completed"]; got != "2026-08-07T13:00:00Z" {
+		t.Errorf("get last_tick_completed = %v, want 2026-08-07T13:00:00Z", got)
+	}
+
+	// --- never-ticked project: both keys present, empty string ---
+	mustCreateAPITestProject(t, a.db, "fresh")
+	status, body = a.do(t, "GET", "/api/v1/projects/fresh", nil)
+	if status != http.StatusOK {
+		t.Fatalf("get fresh status = %d, want 200", status)
+	}
+	p = body["project"].(map[string]interface{})
+	v, ok := p["last_tick_started"]
+	if !ok {
+		t.Errorf("fresh project missing last_tick_started key: %v", p)
+	} else if v != "" {
+		t.Errorf("fresh last_tick_started = %v, want empty string", v)
+	}
+	v, ok = p["last_tick_completed"]
+	if !ok {
+		t.Errorf("fresh project missing last_tick_completed key: %v", p)
+	} else if v != "" {
+		t.Errorf("fresh last_tick_completed = %v, want empty string", v)
+	}
+}
+
 func TestAPI_UpdateProject_Success(t *testing.T) {
 	a := newAPITestServer(t)
 	mustCreateAPITestProject(t, a.db, "alpha")

@@ -252,7 +252,7 @@ func TestConformance_WireFormat_Projects(t *testing.T) {
 		t.Fatalf("got %d projects, want 1", len(projs))
 	}
 	p := projs[0].(map[string]interface{})
-	for _, key := range []string{"name", "repo_url", "workdir", "weight", "priority", "cooldown_s", "decay_rate", "enabled", "created_at", "updated_at"} {
+	for _, key := range []string{"name", "repo_url", "workdir", "weight", "priority", "cooldown_s", "decay_rate", "enabled", "created_at", "updated_at", "last_tick_started", "last_tick_completed"} {
 		if _, ok := p[key]; !ok {
 			t.Errorf("projects[0] missing snake_case key %q: %v", key, p)
 		}
