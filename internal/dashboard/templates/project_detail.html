@@ -1,10 +1,10 @@
 {{define "project_detail"}}{{template "head" .}}
 {{template "sidebar" "overview"}}
-<div class="main">
+<div class="main" id="main">
 <a href="/" class="back">← back to fleet</a>
 <div class="page-head">
 <h1>{{.Project.Name}}</h1>
-<div class="actions"><span class="badge">{{if .Project.Enabled}}<span class="status-ok">Enabled</span>{{else}}<span class="status-fail">Disabled</span>{{end}}</span></div>
+<div class="actions"><span class="signal"><span class="dot"></span> {{if .Project.Enabled}}Enabled{{else}}Disabled{{end}}</span></div>
 </div>
 <div class="meta">{{.Project.RepoURL}}</div>
 

@@ -1,10 +1,10 @@
 {{define "namespace_view"}}{{template "head" .}}
 {{template "sidebar" "overview"}}
-<div class="main">
+<div class="main" id="main">
 <a href="/" class="back">← back to fleet</a>
 <div class="page-head">
 <h1>Namespace: {{.Namespace.ID}}</h1>
-<div class="actions"><span class="badge">{{.EnabledProjects}} enabled projects</span></div>
+<div class="actions"><span class="signal"><span class="dot"></span> {{.EnabledProjects}} enabled</span></div>
 </div>
 {{if .Namespace.Description}}<div class="meta">{{.Namespace.Description}}</div>{{end}}
 

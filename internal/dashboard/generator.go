@@ -381,10 +381,10 @@ func (g *Generator) GenerateQueue(w io.Writer) error {
 
 const pageTemplate = `{{template "head" .}}
 {{template "sidebar" "overview"}}
-<div class="main">
+<div class="main" id="main">
 <div class="page-head">
 <h1>Fleet Overview</h1>
-<div class="actions"><span class="badge">htmx live · 10s</span></div>
+<div class="actions"><span class="signal"><span class="dot"></span> htmx live · 10s</span></div>
 </div>
 <div class="meta">Generated {{.GeneratedAt}} · auto-refresh 60s</div>
 

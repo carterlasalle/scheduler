@@ -1,9 +1,9 @@
 {{define "health"}}{{template "head" .}}
 {{template "sidebar" "health"}}
-<div class="main">
+<div class="main" id="main">
 <div class="page-head">
 <h1>System Health</h1>
-<div class="actions"><span class="badge">auto-refresh 10s</span></div>
+<div class="actions"><span class="signal"><span class="dot"></span> auto-refresh 10s</span></div>
 </div>
 <div class="meta">Generated {{.GeneratedAt}}</div>
 

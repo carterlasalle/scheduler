@@ -1,9 +1,9 @@
 {{define "queue"}}{{template "head" .}}
 {{template "sidebar" "queue"}}
-<div class="main">
+<div class="main" id="main">
 <div class="page-head">
 <h1>Evaluation Queue</h1>
-<div class="actions"><span class="badge">{{.Count}} eligible</span></div>
+<div class="actions"><span class="signal"><span class="dot"></span> {{.Count}} eligible</span></div>
 </div>
 <div class="meta">Sorted by urgency (descending) · auto-refresh 30s</div>
 

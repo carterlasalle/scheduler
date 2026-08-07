@@ -1,9 +1,9 @@
 {{define "tick_history"}}{{template "head" .}}
 {{template "sidebar" "ticks"}}
-<div class="main">
+<div class="main" id="main">
 <div class="page-head">
 <h1>Tick History</h1>
-<div class="actions"><span class="badge">{{.TotalTicks}} total</span></div>
+<div class="actions"><span class="signal"><span class="dot"></span> {{.TotalTicks}} total</span></div>
 </div>
 <div class="meta">Page {{.Page}} of {{.TotalPages}} · generated {{.GeneratedAt}} · auto-refresh 30s</div>
 
