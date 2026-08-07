@@ -28,7 +28,6 @@ deploy/*.log
 !.coding-hermes/tasks.md.bak
 !.coding-hermes/board/
 !.coding-hermes/board/schema.sql
-!.coding-hermes/board/*.jsonl
 .coding-hermes/board/*.db
 !.coding-hermes/research/
 !.coding-hermes/research/brin-index-design.md
@@ -38,3 +37,8 @@ deploy/*.log
 .gitreins/history/
 dagger.db
 /schedulerd
+
+.coding-hermes/board/board.db
+.coding-hermes/board/board.db.wal
+.coding-hermes/board/*.parquet
+.coding-hermes/board/*.duckdb
