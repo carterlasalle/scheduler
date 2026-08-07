@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -65,6 +66,8 @@ type FleetRow struct {
 	AvgTickSecs  int
 	SuccessRate  int // percent
 	ETA          string
+	// GitReins LLM-judge verdict pass rate (0-100) over the project history.
+	GitReinsPass int // percent; -1 = no verdicts
 }
 
 // TickRow is one tick in the history table.
@@ -130,6 +133,7 @@ type ProjectDetailData struct {
 	ETA         string
 	BoardSteps  []BoardStep
 	TickWork    map[string]string // tick id → what it worked on (commit subjects)
+	GitReins    GitReinsSummary
 }
 
 // BoardStep is one task row from the board, for the roadmap visualization.
@@ -138,6 +142,26 @@ type BoardStep struct {
 	Title  string
 	Status string // "done" | "active" | "pending"
 	Commit string
+}
+
+// GitReinsVerdict is one LLM-judge verdict from .gitreins/history.
+type GitReinsVerdict struct {
+	TaskID      string
+	TaskTitle   string
+	Passed      bool
+	Tier1Passed bool
+	Tier2Passed bool
+	HasTier2    bool
+	EvaluatedAt string
+}
+
+// GitReinsSummary is the aggregate pass rate + latest verdicts for a project.
+type GitReinsSummary struct {
+	Total   int
+	Passed  int
+	Failed  int
+	RatePct int
+	Latest  []GitReinsVerdict // newest first, capped
 }
 
 // TickHistoryData holds one page of the global tick history.
@@ -277,6 +301,12 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		r.CostSeries = g.recentCostSeries(ctx, r.Name, 12)
 		r.RecentTicks, r.RecentFailures = g.recentTickHealth(ctx, r.Name, 10)
 		r.AvgTickSecs, r.SuccessRate, r.ETA = g.observabilityStats(ctx, r.Name, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
+		r.GitReinsPass = -1
+		if r.Workdir != "" {
+			if gr := readGitReins(r.Workdir, 0); gr.Total > 0 {
+				r.GitReinsPass = gr.RatePct
+			}
+		}
 	}
 
 	// Active ticks count.
@@ -629,6 +659,94 @@ func formatETA(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%dm", int(d/time.Minute))
 	}
+}
+
+// readGitReins walks a project's .gitreins/history and returns the aggregate
+// LLM-judge verdict summary (pass rate + latest verdicts). Each verdict is a
+// .gitreins/history/<YYYY-MM-DD>/<sha>/verdict.json. Best-effort: malformed
+// files are skipped; a missing/empty history yields a zero summary.
+func readGitReins(workdir string, maxLatest int) GitReinsSummary {
+	root := filepath.Join(workdir, ".gitreins", "history")
+	var sum GitReinsSummary
+	var all []GitReinsVerdict
+
+	// dateDir/verdictDir/verdict.json
+	dateDirs, err := os.ReadDir(root)
+	if err != nil {
+		return sum
+	}
+	for _, dd := range dateDirs {
+		if !dd.IsDir() {
+			continue
+		}
+		verdictDirs, err := os.ReadDir(filepath.Join(root, dd.Name()))
+		if err != nil {
+			continue
+		}
+		for _, vd := range verdictDirs {
+			if !vd.IsDir() {
+				continue
+			}
+			p := filepath.Join(root, dd.Name(), vd.Name(), "verdict.json")
+			data, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			var raw struct {
+				TaskID    string `json:"task_id"`
+				TaskTitle string `json:"task_title"`
+				Passed    bool   `json:"passed"`
+				Evaluated string `json:"evaluated_at"`
+				Stages    struct {
+					Tier1 *struct{ Passed bool `json:"passed"` } `json:"tier1"`
+					Tier2 *struct{ Passed bool `json:"passed"` } `json:"tier2"`
+				} `json:"stages"`
+			}
+			if err := json.Unmarshal(data, &raw); err != nil {
+				continue
+			}
+			v := GitReinsVerdict{
+				TaskID:    raw.TaskID,
+				TaskTitle: raw.TaskTitle,
+				Passed:    raw.Passed,
+			}
+			if raw.Stages.Tier1 != nil {
+				v.Tier1Passed = raw.Stages.Tier1.Passed
+			}
+			if raw.Stages.Tier2 != nil {
+				v.Tier2Passed = raw.Stages.Tier2.Passed
+				v.HasTier2 = true
+			}
+			if raw.Evaluated != "" {
+				v.EvaluatedAt = raw.Evaluated
+			} else {
+				v.EvaluatedAt = dd.Name()
+			}
+			sum.Total++
+			if v.Passed {
+				sum.Passed++
+			} else {
+				sum.Failed++
+			}
+			all = append(all, v)
+		}
+	}
+	if sum.Total > 0 {
+		sum.RatePct = sum.Passed * 100 / sum.Total
+	}
+	// Newest first: sort by evaluatedAt desc (string compare works for ISO).
+	for i := range all {
+		for j := i + 1; j < len(all); j++ {
+			if all[j].EvaluatedAt > all[i].EvaluatedAt {
+				all[i], all[j] = all[j], all[i]
+			}
+		}
+	}
+	if maxLatest > 0 && len(all) > maxLatest {
+		all = all[:maxLatest]
+	}
+	sum.Latest = all
+	return sum
 }
 
 // tickWork returns the commit subject lines that landed between spawned and

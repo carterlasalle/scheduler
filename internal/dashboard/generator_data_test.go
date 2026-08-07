@@ -81,6 +81,51 @@ func TestNextTickIn(t *testing.T) {
 	}
 }
 
+func TestReadGitReins(t *testing.T) {
+	dir := t.TempDir()
+	// .gitreins/history/<date>/<sha>/verdict.json
+	gr := filepath.Join(dir, ".gitreins", "history", "2026-08-07", "abc1234")
+	if err := os.MkdirAll(gr, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pass := `{"task_id":"T10","task_title":"PR10","passed":true,"stages":{"tier1":{"passed":true},"tier2":{"passed":true}},"evaluated_at":"2026-08-07T10:00:00Z"}`
+	fail := `{"task_id":"T09","task_title":"PR9","passed":false,"stages":{"tier1":{"passed":true},"tier2":{"passed":false}},"evaluated_at":"2026-08-07T09:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(gr, "verdict.json"), []byte(pass), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gr2 := filepath.Join(dir, ".gitreins", "history", "2026-08-07", "def5678")
+	if err := os.MkdirAll(gr2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gr2, "verdict.json"), []byte(fail), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sum := readGitReins(dir, 10)
+	if sum.Total != 2 || sum.Passed != 1 || sum.Failed != 1 {
+		t.Errorf("expected total=2 pass=1 fail=1, got total=%d pass=%d fail=%d", sum.Total, sum.Passed, sum.Failed)
+	}
+	if sum.RatePct != 50 {
+		t.Errorf("expected 50%% rate, got %d", sum.RatePct)
+	}
+	if len(sum.Latest) != 2 {
+		t.Fatalf("expected 2 latest, got %d", len(sum.Latest))
+	}
+	// Newest first.
+	if sum.Latest[0].TaskID != "T10" {
+		t.Errorf("expected newest first T10, got %s", sum.Latest[0].TaskID)
+	}
+	if !sum.Latest[0].Tier2Passed || sum.Latest[0].HasTier2 != true {
+		t.Errorf("expected T10 tier2 passed, got %+v", sum.Latest[0])
+	}
+
+	// Missing history → zero summary.
+	empty := readGitReins(filepath.Join(t.TempDir(), "none"), 5)
+	if empty.Total != 0 {
+		t.Errorf("expected 0 for missing history, got %d", empty.Total)
+	}
+}
+
 func TestFormatETA(t *testing.T) {
 	if got := formatETA(0); got != "—" {
 		t.Errorf("zero -> expected '—', got %q", got)

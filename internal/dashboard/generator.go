@@ -136,6 +136,10 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	var rt, rf int
 	rt, rf = g.recentTickHealth(ctx, name, 10)
 	data.AvgTickSecs, data.SuccessRate, data.ETA = g.observabilityStats(ctx, name, data.BoardDone, data.BoardTotal, rt, rf)
+	// GitReins LLM-judge verdict summary (pass rate + latest verdicts).
+	if project.Workdir != "" {
+		data.GitReins = readGitReins(project.Workdir, 12)
+	}
 
 	// Last 20 ticks for the history table.
 	if ticks, err := database.ListTicks(ctx, g.db, name, 20); err == nil {
@@ -415,7 +419,7 @@ const pageTemplate = `{{template "head" .}}
 <h2>Projects</h2>
 <div class="table-wrap">
 <table>
-<thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Progress</th><th>Steps Left</th><th>ETA</th><th>Next Tick</th><th>Cost</th><th>Recent</th></tr></thead>
+<thead><tr><th>Project</th><th>W</th><th>P</th><th>Last Tick</th><th>Outcome</th><th>Progress</th><th>Steps Left</th><th>ETA</th><th>Next Tick</th><th>Cost</th><th>GitReins</th><th>Recent</th></tr></thead>
 <tbody id="fleet-overview"
 hx-get="/dashboard/partial"
 hx-trigger="every 10s"
@@ -439,6 +443,7 @@ hx-swap="innerHTML">
 <td class="num">{{if .ETA}}<span title="avg {{.AvgTickSecs}}s/tick · {{.SuccessRate}}% success">{{.ETA}}</span>{{else}}<span class="meta">—</span>{{end}}</td>
 <td class="{{if eq .NextTickIn "running"}}status-running{{else if eq .NextTickIn "due now"}}status-fail{{end}}">{{if .NextTickIn}}{{.NextTickIn}}{{else}}—{{end}}</td>
 <td class="num">{{if .CostToday}}<span title="today">${{printf "%.3f" .CostToday}}</span>{{else}}<span class="meta">—</span>{{end}}{{if sparkline .CostSeries}}<br>{{sparkline .CostSeries}}{{end}}</td>
+<td>{{if lt .GitReinsPass 0}}<span class="meta">—</span>{{else if eq .GitReinsPass 100}}<span class="pill ok">{{.GitReinsPass}}%</span>{{else if ge .GitReinsPass 70}}<span class="pill warn">{{.GitReinsPass}}%</span>{{else}}<span class="pill fail">{{.GitReinsPass}}%</span>{{end}}</td>
 <td class="num">{{if .RecentFailures}}<span class="status-fail">{{.RecentFailures}}/{{.RecentTicks}}</span>{{else if .RecentTicks}}<span class="status-ok">{{.RecentTicks}} ok</span>{{else}}<span class="meta">—</span>{{end}}</td>
 </tr>{{end}}
 </tbody>

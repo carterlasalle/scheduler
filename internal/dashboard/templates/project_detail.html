@@ -43,7 +43,31 @@
 .step.active{border-color:var(--signal);background:rgba(232,163,61,0.08);box-shadow:0 0 0 1px var(--signal)}
 .step.active .step-id{color:var(--signal-hi)}
 .step.pending{opacity:0.7}
-.work{white-space:normal;min-width:240px;max-width:360px;color:var(--text);font-size:0.78rem;line-height:1.4}
+</style>
+{{end}}
+
+{{if .GitReins.Latest}}
+<h2>GitReins Verdicts</h2>
+<p class="meta">{{.GitReins.Passed}}/{{.GitReins.Total}} judged pass ({{.GitReins.RatePct}}%) · LLM judge verdicts from .gitreins/history</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Task</th><th>Verdict</th><th>Tier 1</th><th>Tier 2</th><th>Evaluated</th></tr></thead>
+<tbody>
+{{range .GitReins.Latest}}
+<tr>
+  <td class="mono">{{.TaskID}}</td>
+  <td>{{if .Passed}}<span class="pill ok">PASS</span>{{else}}<span class="pill fail">FAIL</span>{{end}}</td>
+  <td>{{if .Tier1Passed}}<span class="status-ok">✓ guards</span>{{else}}<span class="status-fail">✗ guards</span>{{end}}</td>
+  <td>{{if .HasTier2}}{{if .Tier2Passed}}<span class="status-ok">✓ judge</span>{{else}}<span class="status-fail">✗ judge</span>{{end}}{{else}}<span class="meta">—</span>{{end}}</td>
+  <td class="meta">{{.EvaluatedAt}}</td>
+</tr>
+<tr><td colspan="5" class="gr-title">{{if .TaskTitle}}{{.TaskTitle}}{{else}}—{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+<style>
+.gr-title{color:var(--muted);font-size:0.74rem;border-top:none;padding-top:0}
 </style>
 {{end}}
 
