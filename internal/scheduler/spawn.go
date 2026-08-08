@@ -214,6 +214,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				"`hermes chat -q \"<task brief from the board, plus files-to-modify and acceptance criteria>\" -m <worker_model> --provider <worker_provider> -s coding-hermes-worker --ignore-rules -Q` "+
 				"(terminal background=true). The worker shares this same workdir, so it edits files and commits directly. "+
 				"Then poll the background process until it exits, verify build/lint/test and the commit landed, update the board, and report. "+
+				"MANDATORY PUSH AFTER EVERY COMMIT — do not skip: after ANY commit (worker or yours), run `git push origin <branch>` (or `git push`) and verify `git fetch origin && git rev-list --count origin/<branch>..HEAD` is 0. A tick that ends with unpushed commits is NOT complete. Never rely on the worker having pushed — verify the remote HEAD yourself. On non-fast-forward push, `git pull --rebase`, re-run the gate, push. "+
 				"Only implement trivial one-file changes yourself; anything multi-file or architectural goes to a worker. "+
 				"Worker model/provider: %s. "+
 				"MANDATORY GitReins lifecycle — do not skip: (1) BEFORE any implementation, run `gitreins task create <TASK-ID> \"<title>\" \"<criterion>\"` then `gitreins task start <TASK-ID>` for the board task you picked. "+
