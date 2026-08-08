@@ -72,6 +72,9 @@ type FleetRow struct {
 	// ProjectedCost is the estimated remaining cost to finish the board
 	// (avg cost per completed tick × steps remaining).
 	ProjectedCost float64
+	// EtaBreakdown is the learning-predictor per-type estimate, e.g.
+	// "code ×2 40m + test ×5 25m" (empty when no signal).
+	EtaBreakdown string
 	// GitReins LLM-judge verdict pass rate (0-100) over the project history.
 	GitReinsPass int // percent; -1 = no verdicts
 }
@@ -311,6 +314,16 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		r.CostSeries = g.recentCostSeries(ctx, r.Name, 12)
 		r.RecentTicks, r.RecentFailures = g.recentTickHealth(ctx, r.Name, 10)
 		r.AvgTickSecs, r.SuccessRate, r.ETA, r.CompletionAt, r.ProjectedCost = g.observabilityStats(ctx, r.Name, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
+		// Learning ETA: predict remaining time from per-task-type durations
+		// learned from tick history. Prefer it over the naive avg×steps.
+		if r.Workdir != "" {
+			steps := readBoardSteps(filepath.Join(r.Workdir, ".coding-hermes", "tasks.md"))
+			if learned, learnedAt, breakdown := g.learnedETA(ctx, r.Name, r.Workdir, steps); learned > 0 {
+				r.ETA = formatETA(learned)
+				r.CompletionAt = learnedAt
+				r.EtaBreakdown = breakdown
+			}
+		}
 		r.GitReinsPass = -1
 		if r.Workdir != "" {
 			if gr := readGitReins(r.Workdir, 0); gr.Total > 0 {
