@@ -135,7 +135,7 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	// Observability: avg tick duration, success rate, ETA over recent ticks.
 	var rt, rf int
 	rt, rf = g.recentTickHealth(ctx, name, 10)
-	data.AvgTickSecs, data.SuccessRate, data.ETA, data.CompletionAt, data.ProjectedCost = g.observabilityStats(ctx, name, data.BoardDone, data.BoardTotal, rt, rf)
+	data.AvgTickSecs, data.AvgCost, data.SuccessRate, data.ETA, data.CompletionAt, data.ProjectedCost = g.observabilityStats(ctx, name, data.BoardDone, data.BoardTotal, rt, rf)
 	// Learning ETA: predict remaining time + cost from per-task-type estimates
 	// learned from tick history + the fleet-wide prior (project-biased blend).
 	if project.Workdir != "" {
@@ -475,7 +475,7 @@ hx-swap="innerHTML">
 <td>{{.Project}}</td>
 <td>{{if eq .Status "completed"}}<span class="pill ok">completed</span>{{else if eq .Status "failed"}}<span class="pill fail">failed</span>{{else if eq .Status "timeout"}}<span class="pill warn">timeout</span>{{else if eq .Status "running"}}<span class="pill run"><span class="running-dot"></span>running</span>{{else}}<span class="meta">—</span>{{end}}</td>
 <td>{{if .Outcome}}{{.Outcome}}{{else}}—{{end}}</td>
-<td class="num">{{if .Duration}}{{.Duration}}{{else}}<span class="meta">—</span>{{end}}</td>
+<td class="num">{{if eq .Status "running"}}{{liveDur .SpawnedAt}}{{else if .Duration}}{{.Duration}}{{else}}<span class="meta">—</span>{{end}}</td>
 <td class="meta">{{shortTime .SpawnedAt}}</td>
 <td class="num">{{.Commits}}</td>
 <td class="num">{{.FilesChanged}}</td>

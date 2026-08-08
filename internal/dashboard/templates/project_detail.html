@@ -117,8 +117,8 @@
   <td>{{if .LatestTick.Outcome}}{{.LatestTick.Outcome}}{{else}}—{{end}}</td>
   <td class="mono">{{if .LatestTick.SessionID}}{{.LatestTick.SessionID}}{{else}}—{{end}}</td>
   <td class="meta">{{.LatestTick.SpawnedAt}}</td>
-  <td class="meta">{{if .LatestTick.CompletedAt}}{{.LatestTick.CompletedAt}}{{else}}—{{end}}</td>
-  <td class="num">${{printf "%.4f" .LatestTick.CostUSD}}</td>
+  <td class="meta">{{if eq .LatestTick.Status "running"}}{{liveDur .LatestTick.SpawnedAt}} (live){{else if .LatestTick.CompletedAt}}{{.LatestTick.CompletedAt}}{{else}}—{{end}}</td>
+  <td class="num">{{if eq .LatestTick.Status "running"}}~{{printf "$%.4f" (liveCost .LatestTick.SpawnedAt $.AvgTickSecs $.AvgCost)}}{{else}}${{printf "%.4f" .LatestTick.CostUSD}}{{end}}</td>
 </tr>
 </tbody>
 </table>
@@ -138,12 +138,12 @@
   <td class="mono">{{.ID}}</td>
   <td>{{if eq .Status "completed"}}<span class="pill ok">completed</span>{{else if eq .Status "failed"}}<span class="pill fail">failed</span>{{else if eq .Status "running"}}<span class="pill run"><span class="running-dot"></span>running</span>{{else}}<span class="pill warn">{{.Status}}</span>{{end}}</td>
   <td>{{if .Outcome}}{{.Outcome}}{{else}}—{{end}}</td>
-  <td class="num">{{if .CompletedAt}}{{duration .SpawnedAt .CompletedAt}}{{else}}—{{end}}</td>
+  <td class="num">{{if eq .Status "running"}}{{liveDur .SpawnedAt}}{{else if .CompletedAt}}{{duration .SpawnedAt .CompletedAt}}{{else}}—{{end}}</td>
   <td class="meta">{{.SpawnedAt}}</td>
   <td class="work">{{if index $.TickWork .ID}}{{index $.TickWork .ID}}{{else}}<span class="meta">—</span>{{end}}</td>
   <td class="num">{{.Commits}}</td>
   <td class="num">{{.FilesChanged}}</td>
-  <td class="num">${{printf "%.4f" .CostUSD}}</td>
+  <td class="num">{{if eq .Status "running"}}~{{printf "$%.4f" (liveCost .SpawnedAt $.AvgTickSecs $.AvgCost)}}{{else}}${{printf "%.4f" .CostUSD}}{{end}}</td>
 </tr>{{end}}
 </tbody>
 </table>

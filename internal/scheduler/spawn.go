@@ -502,9 +502,11 @@ func (st *SpawnedTick) Wait() TickOutcome {
 
 	// Cost estimation: real session export (hermes sessions export) is a future
 	// task. For now we populate estimated token counts and cost so that cost
-	// aggregation works from day one. Only estimate on completed ticks — failed
-	// or timed-out ticks consumed fewer tokens (process exited early).
-	if outcome.Status == TickCompleted {
+	// aggregation works from day one. Estimate on completed AND timed-out ticks:
+	// a timeout runs the full window (it is killed at the cap), so it consumes
+	// roughly a full tick's worth of tokens and has a real cost. Failed ticks
+	// that exit early (no kill) consumed fewer tokens and stay at 0.
+	if outcome.Status == TickCompleted || outcome.Status == TickTimeout {
 		tin, tout, cost := estimateTickCost()
 		outcome.TokensIn = tin
 		outcome.TokensOut = tout

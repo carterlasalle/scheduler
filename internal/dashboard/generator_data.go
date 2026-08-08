@@ -72,6 +72,9 @@ type FleetRow struct {
 	// ProjectedCost is the estimated remaining cost to finish the board
 	// (avg cost per completed tick × steps remaining).
 	ProjectedCost float64
+	// AvgCost is the mean cost per completed tick, used for live-cost estimate
+	// of running ticks.
+	AvgCost float64
 	// EtaBreakdown is the learning-predictor per-type estimate, e.g.
 	// "code ×2 40m + test ×5 25m" (empty when no signal).
 	EtaBreakdown string
@@ -145,6 +148,7 @@ type ProjectDetailData struct {
 	GitReins    GitReinsSummary
 	CompletionAt string
 	ProjectedCost float64
+	AvgCost     float64 // mean cost per completed tick (for live-cost estimate)
 	EtaBreakdown string // per-type estimate, e.g. "code ×2 40m + test ×5 25m"
 	SpeedCost   []SpeedCostPoint // for the speed/cost-over-time charts
 }
@@ -315,7 +319,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		r := &data.Projects[i]
 		r.CostSeries = g.recentCostSeries(ctx, r.Name, 12)
 		r.RecentTicks, r.RecentFailures = g.recentTickHealth(ctx, r.Name, 10)
-		r.AvgTickSecs, r.SuccessRate, r.ETA, r.CompletionAt, r.ProjectedCost = g.observabilityStats(ctx, r.Name, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
+		r.AvgTickSecs, r.AvgCost, r.SuccessRate, r.ETA, r.CompletionAt, r.ProjectedCost = g.observabilityStats(ctx, r.Name, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
 		// Learning ETA: predict remaining time + cost from per-task-type
 		// estimates learned from tick history + the fleet-wide prior.
 		if r.Workdir != "" {
@@ -670,14 +674,15 @@ func tickDuration(spawned, completed string) string {
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
-// observabilityStats returns (avgSecs, successPct, eta, completionAt, projectedCost)
+// observabilityStats returns (avgSecs, avgCost, successPct, eta, completionAt, projectedCost)
 // for a project over its recent completed ticks.
 //   - avgSecs: mean duration of the last N completed ticks (floored at 60s)
+//   - avgCost: mean cost of the last N completed ticks
 //   - successPct: % of last N ticks that completed (vs failed/timeout)
 //   - eta: avg duration × remaining board steps ("" when no signal)
 //   - completionAt: UTC RFC3339 of now + eta ("" when no eta)
 //   - projectedCost: avg cost per completed tick × remaining steps
-func (g *Generator) observabilityStats(ctx context.Context, project string, boardDone, boardTotal int, recentTicks, recentFailures int) (avgSecs, successPct int, eta, completionAt string, projectedCost float64) {
+func (g *Generator) observabilityStats(ctx context.Context, project string, boardDone, boardTotal int, recentTicks, recentFailures int) (avgSecs int, avgCost float64, successPct int, eta, completionAt string, projectedCost float64) {
 	// Average duration + cost over up-to-10 completed ticks.
 	rows, err := g.db.QueryContext(ctx, `
 		SELECT spawned_at, completed_at, cost_usd FROM ticks
@@ -701,7 +706,6 @@ func (g *Generator) observabilityStats(ctx context.Context, project string, boar
 		}
 		_ = rows.Close()
 	}
-	var avgCost float64
 	if count > 0 {
 		avgSecs = int(total.Seconds() / float64(count))
 		if avgSecs < 60 {
@@ -731,7 +735,7 @@ func (g *Generator) observabilityStats(ctx context.Context, project string, boar
 			projectedCost = avgCost * float64(remaining)
 		}
 	}
-	return avgSecs, successPct, eta, completionAt, projectedCost
+	return avgSecs, avgCost, successPct, eta, completionAt, projectedCost
 }
 
 func parseDuration(spawned, completed string) time.Duration {

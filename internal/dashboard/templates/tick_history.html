@@ -17,7 +17,7 @@
 <td><a href="/projects/{{.ProjectName}}">{{.ProjectName}}</a></td>
 <td>{{if eq .Status "completed"}}<span class="pill ok">completed</span>{{else if eq .Status "failed"}}<span class="pill fail">failed</span>{{else if eq .Status "running"}}<span class="pill run"><span class="running-dot"></span>running</span>{{else if eq .Status "timeout"}}<span class="pill warn">timeout</span>{{else}}<span class="meta">{{.Status}}</span>{{end}}</td>
 <td>{{if .Outcome}}{{.Outcome}}{{else}}—{{end}}</td>
-<td class="num">{{if .CompletedAt}}{{duration .SpawnedAt .CompletedAt}}{{else}}—{{end}}</td>
+<td class="num">{{if eq .Status "running"}}{{liveDur .SpawnedAt}}{{else if .CompletedAt}}{{duration .SpawnedAt .CompletedAt}}{{else}}—{{end}}</td>
 <td class="meta">{{.SpawnedAt}}</td>
 <td class="num">{{.Commits}}</td>
 <td class="num">{{.FilesChanged}}</td>

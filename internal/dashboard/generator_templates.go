@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"strings"
+	"time"
 )
 
 // mustReadStatic panics if the embedded asset cannot be read at init time —
@@ -39,6 +40,46 @@ func loadTemplates() *template.Template {
 		"sub": func(a, b int) int { return a - b },
 		"duration": func(spawned, completed string) string {
 			return tickDuration(spawned, completed)
+		},
+		// liveDur renders the live elapsed time for a running tick (now minus
+		// spawned), as "12m 30s". Returns "—" when spawned is empty/unparseable.
+		"liveDur": func(spawned string) string {
+			if spawned == "" {
+				return "—"
+			}
+			s, err := time.Parse(time.RFC3339, spawned)
+			if err != nil {
+				return "—"
+			}
+			d := time.Since(s)
+			if d < 0 {
+				d = 0
+			}
+			if d < time.Minute {
+				return fmt.Sprintf("%ds", int(d.Seconds()))
+			}
+			return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+		},
+		// liveCost estimates the running cost of a live tick by scaling the
+		// project's average cost-per-tick by the fraction of the average tick
+		// duration already elapsed. Returns 0 when there's no signal.
+		"liveCost": func(spawned string, avgSecs int, avgCost float64) float64 {
+			if spawned == "" || avgSecs <= 0 || avgCost <= 0 {
+				return 0
+			}
+			s, err := time.Parse(time.RFC3339, spawned)
+			if err != nil {
+				return 0
+			}
+			elapsed := time.Since(s).Seconds()
+			if elapsed <= 0 {
+				return 0
+			}
+			frac := elapsed / float64(avgSecs)
+			if frac > 1 {
+				frac = 1 // cap at one full tick's average cost
+			}
+			return avgCost * frac
 		},
 		// localtime renders a UTC RFC3339 timestamp as a <time> element with a
 		// data-utc attribute; the page's JS converts it to the viewer's local
