@@ -832,9 +832,12 @@ func ciConclusion(workdir string) string {
 	if workdir == "" {
 		return ""
 	}
-	out, err := exec.Command("gh", "-C", workdir,
-		"run", "list", "--limit", "1", "--json", "conclusion,status,headBranch",
-		"--jq", `.[0].conclusion`).Output()
+	// gh has no -C dir flag (that's git); set the subprocess working dir.
+	cmd := exec.Command("gh", "run", "list", "--limit", "1",
+		"--json", "conclusion,status,headBranch",
+		"--jq", `.[0].conclusion`)
+	cmd.Dir = workdir
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
