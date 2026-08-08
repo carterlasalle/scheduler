@@ -501,17 +501,29 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	outcome.ExitCode = st.cmd.ProcessState.ExitCode()
 	outcome.Duration = finished.Sub(st.Started)
 
-	// Cost estimation: real session export (hermes sessions export) is a future
-	// task. For now we populate estimated token counts and cost so that cost
-	// aggregation works from day one. Estimate on completed AND timed-out ticks:
-	// a timeout runs the full window (it is killed at the cap), so it consumes
-	// roughly a full tick's worth of tokens and has a real cost. Failed ticks
-	// that exit early (no kill) consumed fewer tokens and stay at 0.
+	// Cost: prefer REAL per-tick cost from the foreman's Hermes state.db
+	// (session_model_usage.estimated/actual_cost_usd overlapping this tick's
+	// window). Falls back to the flat estimate when telemetry is unavailable.
+	// Populated on completed AND timed-out ticks: a timeout runs the full
+	// window (killed at the cap), so it consumes a full tick's tokens and has a
+	// real cost. Failed ticks that exit early consumed fewer and stay near 0.
 	if outcome.Status == TickCompleted || outcome.Status == TickTimeout {
-		tin, tout, cost := estimateTickCost()
-		outcome.TokensIn = tin
-		outcome.TokensOut = tout
+		workdir := ""
+		if st.cmd != nil && st.cmd.Dir != "" {
+			workdir = st.cmd.Dir
+		}
+		cost, isReal := resolveRealTickCost(st.spawner.foremanHome, workdir, st.Project, st.Started, finished)
 		outcome.CostUSD = cost
+		if !isReal {
+			// Still record the estimated token counts so aggregation works
+			// even when telemetry is missing.
+			tin, tout, _ := estimateTickCost()
+			outcome.TokensIn = tin
+			outcome.TokensOut = tout
+		} else {
+			outcome.TokensIn = 0
+			outcome.TokensOut = 0
+		}
 		// Measure real git work the foreman produced this tick (exec path only —
 		// gateway spawns have no process/repo baseline). Best-effort: a non-git
 		// or unreadable workdir leaves commits/files at 0.
