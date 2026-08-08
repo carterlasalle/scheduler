@@ -180,6 +180,118 @@ func TestAlertEscalator_CheckStarvation_RecentTick(t *testing.T) {
 	}
 }
 
+// TestAlertEscalator_CheckStarvation_Throttle proves SCHED-GAP-014: consecutive
+// CheckStarvation calls emit at most one MEDIUM event per starvationThrottleWindow
+// per project, even though the escalator is constructed fresh each time (as it
+// is in production at tick_process.go:134).
+func TestAlertEscalator_CheckStarvation_Throttle(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "starved-proj", 1800) // 2x cooldown = 1h
+	oldTick := time.Now().Add(-3 * time.Hour)  // well beyond 1h threshold
+	insertTick(t, db, "tick-old", "starved-proj", "completed", oldTick)
+
+	// First call — should emit (first crossing of the threshold).
+	events := NewEventLogger(db)
+	escalator := NewAlertEscalator(db, events)
+	if err := escalator.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #1: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 1 {
+		t.Fatalf("after first call: expected 1 MEDIUM event, got %d", n)
+	}
+
+	// Second call — fresh escalator (mirrors production), same project still
+	// starved. Throttle must suppress: still 1 event.
+	escalator2 := NewAlertEscalator(db, events)
+	if err := escalator2.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #2: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 1 {
+		t.Errorf("after second call (throttled): expected 1 MEDIUM event, got %d", n)
+	}
+
+	// Third call — still throttled.
+	escalator3 := NewAlertEscalator(db, events)
+	if err := escalator3.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #3: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 1 {
+		t.Errorf("after third call (throttled): expected 1 MEDIUM event, got %d", n)
+	}
+}
+
+// TestAlertEscalator_CheckStarvation_ThrottleExpires proves that after the
+// throttle window passes, a new starvation event IS emitted (not suppressed
+// forever). We simulate this by manually backdating the first event's
+// created_at to before the throttle window.
+func TestAlertEscalator_CheckStarvation_ThrottleExpires(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "expiring-proj", 1800) // 2x cooldown = 1h
+	oldTick := time.Now().Add(-3 * time.Hour)
+	insertTick(t, db, "tick-old", "expiring-proj", "completed", oldTick)
+
+	events := NewEventLogger(db)
+	escalator := NewAlertEscalator(db, events)
+	if err := escalator.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #1: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 1 {
+		t.Fatalf("after first call: expected 1 MEDIUM event, got %d", n)
+	}
+
+	// Backdate the emitted event to 31 minutes ago — just past the 30-min window.
+	_, err := db.Exec(`UPDATE events SET created_at = ? WHERE severity = 'MEDIUM' AND component = 'escalation'`,
+		time.Now().Add(-31*time.Minute).UTC().Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("backdate event: %v", err)
+	}
+
+	// Second call — throttle has expired, should emit again.
+	escalator2 := NewAlertEscalator(db, events)
+	if err := escalator2.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #2: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 2 {
+		t.Errorf("after throttle expires: expected 2 MEDIUM events, got %d", n)
+	}
+}
+
+// TestAlertEscalator_CheckStarvation_ThrottleDistinctProjects proves the
+// throttle is per-project: two starved projects each emit once on the first
+// call, and neither emits again on the second call.
+func TestAlertEscalator_CheckStarvation_ThrottleDistinctProjects(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "proj-a", 1800)
+	insertProject(t, db, "proj-b", 1800)
+	oldTick := time.Now().Add(-3 * time.Hour)
+	insertTick(t, db, "tick-a", "proj-a", "completed", oldTick)
+	insertTick(t, db, "tick-b", "proj-b", "completed", oldTick)
+
+	events := NewEventLogger(db)
+	escalator := NewAlertEscalator(db, events)
+	if err := escalator.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #1: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 2 {
+		t.Fatalf("after first call: expected 2 MEDIUM events (one per project), got %d", n)
+	}
+
+	// Second call — both throttled.
+	escalator2 := NewAlertEscalator(db, events)
+	if err := escalator2.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #2: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 2 {
+		t.Errorf("after second call (throttled): expected 2 MEDIUM events, got %d", n)
+	}
+}
+
 // TestAlertEscalator_CheckConsecutiveFailures emits HIGH when a project
 // has more than 3 consecutive failed ticks.
 func TestAlertEscalator_CheckConsecutiveFailures(t *testing.T) {

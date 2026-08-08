@@ -43,8 +43,40 @@ func (ae *AlertEscalator) CheckSchedulerHealth(ctx context.Context, lastEval tim
 	return nil
 }
 
+// starvationThrottleWindow is the minimum spacing between consecutive
+// starvation events for the same project (SCHED-GAP-014). The daemon
+// evaluates roughly every 60s, so without throttling a starved project
+// generates ~1 MEDIUM event/minute forever — 179 events in 33 minutes were
+// observed across 20 projects. The escalator is constructed fresh on every
+// evaluation cycle (tick_process.go), so the throttle survives by querying
+// the events table for the last starvation event timestamp per project.
+const starvationThrottleWindow = 30 * time.Minute
+
+// lastStarvationEvent returns the created_at timestamp of the most recent
+// MEDIUM starvation event for the given project, or ok=false if none exists.
+// Uses json_extract for exact project-name matching (parameter-bound, no
+// string interpolation) so similarly-named projects don't collide.
+func (ae *AlertEscalator) lastStarvationEvent(ctx context.Context, project string) (time.Time, bool) {
+	var ts string
+	err := ae.db.QueryRowContext(ctx,
+		`SELECT created_at FROM events
+		 WHERE severity = ? AND component = ? AND json_extract(details, '$.project') = ?
+		 ORDER BY created_at DESC LIMIT 1`,
+		string(SeverityMedium), "escalation", project).Scan(&ts)
+	if err != nil {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
 // CheckStarvation emits MEDIUM for each enabled project that has not had a
-// completed tick in more than 2× its configured maximum interval.
+// completed tick in more than 2× its configured maximum interval. Events are
+// throttled per-project: a starvation event is emitted at most once per
+// starvationThrottleWindow per project (SCHED-GAP-014).
 func (ae *AlertEscalator) CheckStarvation(ctx context.Context) error {
 	// Query enabled projects with their intervals.
 	prows, err := ae.db.QueryContext(ctx,
@@ -109,6 +141,15 @@ func (ae *AlertEscalator) CheckStarvation(ctx context.Context) error {
 		age := now.Sub(last)
 		threshold := time.Duration(proj.cooldown) * time.Second * 2
 		if age > threshold {
+			// SCHED-GAP-014: throttle — only emit if no starvation event for
+			// this project was recorded within the throttle window. This
+			// prevents ~1 event/minute spam while still emitting once every
+			// 30 minutes so the signal is not suppressed forever.
+			if lastEmit, ok := ae.lastStarvationEvent(ctx, proj.name); ok {
+				if now.Sub(lastEmit) < starvationThrottleWindow {
+					continue
+				}
+			}
 			ae.events.Emit(ctx, SeverityMedium, "escalation",
 				fmt.Sprintf("project starved: %s — last tick %v ago, cooldown %ds",
 					proj.name, age.Round(time.Second), proj.cooldown),

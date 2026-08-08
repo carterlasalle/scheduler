@@ -230,6 +230,7 @@ func main() {
 	mcpServer := mcp.NewServer(db, loop)
 	dashGen := dashboard.NewGenerator(db, *gatewayURL)
 	dashGen.SetDuckBrainURL(*duckbrainURL)
+	dashGen.SetSpawnCounts(loop.SpawnMethodCounts)
 
 	// Compose all handlers into one mux.
 	mux := http.NewServeMux()

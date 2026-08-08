@@ -139,6 +139,12 @@ type HealthData struct {
 	TotalTicks       int
 	Goroutines       int
 	MemoryMB         float64
+	// Spawn mode telemetry (SCHED-GAP-013): counters from the scheduler loop
+	// so the health panel labels the ACTUAL spawn mode, not just gateway
+	// connectivity. SpawnMode is "HTTP" or "exec fallback".
+	SpawnMode string
+	SpawnHTTP int64
+	SpawnExec int64
 }
 
 func (g *Generator) collect(ctx context.Context) FleetData {

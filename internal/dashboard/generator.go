@@ -41,6 +41,12 @@ type Generator struct {
 	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
 	started           time.Time
+	// spawnCounts, when set, returns (http, exec) spawn counts from the
+	// scheduler loop so the health panel can label the actual spawn mode
+	// (SCHED-GAP-013) rather than relying on gateway connectivity alone.
+	// Kept as a func so the dashboard package doesn't import the scheduler
+	// package (no dependency cycle; nil = feature off).
+	spawnCounts func() (httpCount, execCount int64)
 }
 
 // NewGenerator creates a dashboard generator. Template is parsed at construction
@@ -84,6 +90,13 @@ func NewGenerator(db *sql.DB, gatewayURL ...string) *Generator {
 // panel can probe it (mirrors gateway probing). Optional.
 func (g *Generator) SetDuckBrainURL(u string) {
 	g.duckbrainURL = strings.TrimRight(u, "/")
+}
+
+// SetSpawnCounts registers a provider for spawn-method counts so the health
+// panel can display the actual spawn mode (HTTP vs exec fallback) instead of
+// inferring it from gateway connectivity (SCHED-GAP-013). Optional.
+func (g *Generator) SetSpawnCounts(fn func() (httpCount, execCount int64)) {
+	g.spawnCounts = fn
 }
 
 // HTMXJS returns the bundled htmx library bytes for serving via HTTP.
@@ -251,6 +264,21 @@ func (g *Generator) GenerateHealth(w io.Writer) error {
 				}
 				_ = resp.Body.Close()
 			}
+		}
+	}
+
+	// Spawn mode telemetry (SCHED-GAP-013): surface the actual spawn mode
+	// so the panel can't be mistaken for "gateway healthy = HTTP spawning."
+	// The gateway HTTP server can be up while the daemon's gateway client is
+	// not wired (missing key), so all spawns go through exec fallback.
+	if g.spawnCounts != nil {
+		httpN, execN := g.spawnCounts()
+		data.SpawnHTTP = httpN
+		data.SpawnExec = execN
+		if execN > 0 && httpN == 0 {
+			data.SpawnMode = "exec fallback"
+		} else {
+			data.SpawnMode = "HTTP"
 		}
 	}
 

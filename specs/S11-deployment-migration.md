@@ -39,7 +39,7 @@ The daemon runs via a bash wrapper script (not systemd — see FIX-STUCK below):
 | `--tick-timeout` | 7200s | Foreman tick timeout (2h) |
 | `--gateway-url` | `http://127.0.0.1:8642` | Hermes Gateway URL |
 | `--gateway-key` | (required) | Gateway auth key |
-| `--no-exec-fallback` | false | Disable exec-based spawn fallback |
+| `--no-exec-fallback` | true | Disable exec-based spawn fallback |
 | `--namespace-mode` | false | Enable multi-namespace weight packing |
 
 ## 3. Configuration

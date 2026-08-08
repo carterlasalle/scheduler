@@ -48,6 +48,11 @@ h1{font-size:1.5rem;margin-bottom:4px}h2{font-size:1.1rem;margin:24px 0 8px}
 {{if .GatewayURL}}<div class="meta">{{.GatewayURL}}</div>{{end}}
 </div>
 <div class="card">
+<div class="label">Spawn Mode</div>
+<div class="value {{if eq .SpawnMode "exec fallback"}}status-warn{{else if eq .SpawnMode "HTTP"}}status-ok{{end}}">{{if .SpawnMode}}{{.SpawnMode}}{{else}}unknown{{end}}</div>
+{{if .SpawnMode}}<div class="meta">spawns_http={{.SpawnHTTP}} · spawns_exec={{.SpawnExec}}{{if and (eq .SpawnMode "exec fallback") (eq .GatewayStatus "connected")}} · gateway client not wired{{end}}</div>{{end}}
+</div>
+<div class="card">
 <div class="label">DuckBrain</div>
 <div class="value {{if eq .DuckBrainStatus "connected"}}status-ok{{else if eq .DuckBrainStatus "not configured"}}status-warn{{else}}status-fail{{end}}">{{.DuckBrainStatus}}</div>
 {{if .DuckBrainBaseURL}}<div class="meta">{{.DuckBrainBaseURL}}</div>{{end}}
