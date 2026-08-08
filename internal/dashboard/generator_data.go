@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -503,9 +504,13 @@ func readBoardProgress(path string) (done, total int) {
 			}
 		case isTaskRow(line):
 			// Task row. The NEVER-DONE line ("## [ ] NEVER-DONE") is a heading,
-			// not a table row, so it never reaches here.
+			// not a task row, so it never reaches here.
 			if section == "active" {
 				total++
+				// Markdown checklist item "- [x]" in an active section is done.
+				if strings.HasPrefix(line, "- [x] ") {
+					done++
+				}
 			} else if section == "completed" {
 				done++
 				total++
@@ -515,23 +520,37 @@ func readBoardProgress(path string) (done, total int) {
 	return done, total
 }
 
-// isTaskRow reports whether a trimmed line is a task table row — i.e. starts
-// with "| " followed by a task ID like T05, V01, DOCS-000, E2E-001, etc., then
-// " |". This lets the board parser count any task-prefix (T##, V##, DOCS-###,
-// TEST-###, GAP-###) rather than assuming every task id starts with "T".
+// trailingCommitRe matches a trailing "(<commit_hash>[, ...])" reference in a
+// markdown checklist title, e.g. "(b0420b9, 2026-08-08)" or "(3cd9b0e)". Used
+// by readBoardSteps to extract the commit for done steps (gitreins2 boards).
+var trailingCommitRe = regexp.MustCompile(`\(([0-9a-f]{7}|[0-9a-f]{40})[,\)]`)
+
+// isTaskRow reports whether a trimmed line is a task row — either a table row
+// ("| T05 | ...") or a markdown task-list item ("- [ ] T05 ..." / "- [x] T05 ...").
+// This lets the board parser count any task-prefix (T##, V01, DOCS-###, R2-##)
+// in either board format. (Markdown checklist support added 2026-08-08 — some
+// boards, e.g. gitreins2, track tasks as "- [x] R2-1 ..." rather than table rows.)
 func isTaskRow(line string) bool {
-	// Must be "| <ID> |" — strip leading "| ".
+	// Markdown task-list item: "- [ ] <ID>" or "- [x] <ID>".
+	if strings.HasPrefix(line, "- [ ] ") || strings.HasPrefix(line, "- [x] ") {
+		rest := line[6:] // strip "- [ ] " (6 chars) — covers both "[ ]" and "[x]"
+		// ID is everything up to the first space or tab.
+		end := strings.IndexAny(rest, " 	")
+		if end <= 0 {
+			return false
+		}
+		return isTaskID(rest[:end])
+	}
+	// Table row: "| <ID> |".
 	if !strings.HasPrefix(line, "| ") {
 		return false
 	}
 	rest := strings.TrimPrefix(line, "| ")
-	// ID is everything up to the next " |".
 	idx := strings.Index(rest, " |")
 	if idx <= 0 {
 		return false
 	}
-	id := rest[:idx]
-	return isTaskID(id)
+	return isTaskID(rest[:idx])
 }
 
 // isTaskID reports whether s looks like a task identifier: 2+ chars of
@@ -1017,6 +1036,40 @@ func readBoardSteps(path string) []BoardStep {
 				section = "other"
 			}
 		case isTaskRow(line):
+			// Two formats:
+			//  Table row:       | T05 | Title | ... | commit |
+			//  Markdown checklist: - [x] R2-1 Title ... (commit)
+			// (markdown checklist support added 2026-08-08 — gitreins2 boards)
+			if strings.HasPrefix(line, "- [ ] ") || strings.HasPrefix(line, "- [x] ") {
+				isDone := strings.HasPrefix(line, "- [x] ")
+				rest := line[6:]
+				// id = first token, title = remainder, commit = 7/40-hex in parens.
+				end := strings.IndexAny(rest, " 	")
+				if end <= 0 {
+					continue
+				}
+				id := rest[:end]
+				title := strings.TrimSpace(rest[end:])
+				// Strip a trailing "(<hex>[, ...])" commit reference.
+				commit := ""
+				if cm := trailingCommitRe.FindStringSubmatch(title); cm != nil {
+					commit = cm[1]
+					title = strings.TrimSpace(strings.TrimSuffix(title, cm[0]))
+				}
+				if id == "" {
+					continue
+				}
+				if section == "active" {
+					if isDone {
+						doneRows = append(doneRows, row{id: id, title: title, commit: commit})
+					} else {
+						pendingRows = append(pendingRows, row{id: id, title: title, commit: commit})
+					}
+				} else if section == "completed" {
+					doneRows = append(doneRows, row{id: id, title: title, commit: commit})
+				}
+				continue
+			}
 			// Table row: | T05 | Title | ... |
 			// cols[1]=ID, cols[2]=title. Only COMPLETED rows carry a commit
 			// hash in a trailing cell; Active/pending rows have deps + model

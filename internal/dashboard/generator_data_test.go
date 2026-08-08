@@ -257,3 +257,75 @@ func TestSparklineFunc(t *testing.T) {
 		t.Errorf("nil series -> expected em-dash, got %q", buf.String())
 	}
 }
+
+// TestReadBoardProgress_MarkdownChecklist verifies the markdown task-list
+// format ("- [x] R2-1 ..." / "- [ ] R2-2 ...") is counted correctly. Some
+// boards (e.g. gitreins2) track tasks as checklists under an "## ... Active"
+// section rather than "| ID |" table rows.
+func TestReadBoardProgress_MarkdownChecklist(t *testing.T) {
+	board := `# Board
+
+## v2 Active
+
+- [x] R2-1 ModelRouter — done
+- [x] R2-2 AgentRunner — done
+- [ ] R2-3 CriteriaEvaluator — pending
+- [ ] R2-4 Evidence store — pending
+
+## [ ] NEVER-DONE — audit
+
+Not counted.
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tasks.md")
+	if err := os.WriteFile(path, []byte(board), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done, total := readBoardProgress(path)
+	if done != 2 {
+		t.Errorf("expected 2 done ([x]), got %d", done)
+	}
+	if total != 4 {
+		t.Errorf("expected 4 total, got %d", total)
+	}
+}
+
+// TestBoardStepsMarkdownChecklist verifies readBoardSteps parses the markdown
+// checklist format ("- [x] R2-1 Title (commit)") used by gitreins2-style boards,
+// alongside the table-row format. Done steps get their commit from the trailing
+// "(<hash>)" reference; the first pending row is marked "active" (next up).
+func TestBoardStepsMarkdownChecklist(t *testing.T) {
+	board := `# b
+## v2 Active
+- [x] R2-1 ModelRouter — done (b0420b9)
+- [ ] R2-2 AgentRunner — pending
+- [ ] R2-3 Evidence — pending
+## Completed
+| T00 | Bootstrap | — |
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t.md")
+	if err := os.WriteFile(path, []byte(board), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	steps := readBoardSteps(path)
+	if len(steps) != 4 {
+		t.Fatalf("expected 4 steps, got %d: %+v", len(steps), steps)
+	}
+	byID := map[string]BoardStep{}
+	for _, s := range steps {
+		byID[s.ID] = s
+	}
+	if s := byID["R2-1"]; s.Status != "done" || s.Commit != "b0420b9" {
+		t.Errorf("R2-1 wrong: %+v", s)
+	}
+	if s := byID["R2-2"]; s.Status != "active" { // first pending = next up
+		t.Errorf("R2-2 should be active (first pending): %+v", s)
+	}
+	if s := byID["R2-3"]; s.Status != "pending" {
+		t.Errorf("R2-3 wrong: %+v", s)
+	}
+	if s := byID["T00"]; s.Status != "done" {
+		t.Errorf("T00 wrong: %+v", s)
+	}
+}
