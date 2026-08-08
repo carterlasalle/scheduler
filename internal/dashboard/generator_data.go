@@ -494,7 +494,7 @@ func readBoardProgress(path string) (done, total int) {
 				// NEVER-DONE or any other section — not counted.
 				section = "other"
 			}
-		case strings.HasPrefix(line, "| T"):
+		case isTaskRow(line):
 			// Task row. The NEVER-DONE line ("## [ ] NEVER-DONE") is a heading,
 			// not a table row, so it never reaches here.
 			if section == "active" {
@@ -506,6 +506,47 @@ func readBoardProgress(path string) (done, total int) {
 		}
 	}
 	return done, total
+}
+
+// isTaskRow reports whether a trimmed line is a task table row — i.e. starts
+// with "| " followed by a task ID like T05, V01, DOCS-000, E2E-001, etc., then
+// " |". This lets the board parser count any task-prefix (T##, V##, DOCS-###,
+// TEST-###, GAP-###) rather than assuming every task id starts with "T".
+func isTaskRow(line string) bool {
+	// Must be "| <ID> |" — strip leading "| ".
+	if !strings.HasPrefix(line, "| ") {
+		return false
+	}
+	rest := strings.TrimPrefix(line, "| ")
+	// ID is everything up to the next " |".
+	idx := strings.Index(rest, " |")
+	if idx <= 0 {
+		return false
+	}
+	id := rest[:idx]
+	return isTaskID(id)
+}
+
+// isTaskID reports whether s looks like a task identifier: 2+ chars of
+// uppercase letters, digits, hyphens (e.g. T05, V01, DOCS-000, E2E-001).
+// The first char must be a letter so the "---" table separator is excluded,
+// and the literal header id "ID" is rejected so the table header row is not
+// counted as a task.
+func isTaskID(s string) bool {
+	if len(s) < 2 || s == "ID" || !isUpperLetter(s[0]) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !isUpperLetter(c) && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func isUpperLetter(c byte) bool {
+	return c >= 'A' && c <= 'Z'
 }
 
 // nextTickIn returns a human-readable countdown to the next tick, or a
@@ -939,7 +980,7 @@ func readBoardSteps(path string) []BoardStep {
 			default:
 				section = "other"
 			}
-		case strings.HasPrefix(line, "| T"):
+		case isTaskRow(line):
 			// Table row: | T05 | Title | ... |
 			// cols[1]=ID, cols[2]=title. Only COMPLETED rows carry a commit
 			// hash in a trailing cell; Active/pending rows have deps + model

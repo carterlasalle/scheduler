@@ -52,17 +52,41 @@ func gitWorkDelta(dir, preHead string, preTotal int) (commits, files int) {
 	if commits < 0 {
 		commits = 0
 	}
-	if commits == 0 || preHead == "" {
-		return commits, 0
+	if preHead == "" {
+		// No baseline — can't diff HEAD, but still count staged work.
+		return commits, countStagedFiles(dir)
 	}
 	out, err := exec.Command("git", "-C", dir, "diff", "--name-only", preHead, "HEAD").Output()
 	if err != nil {
-		return commits, 0
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(line) != "" {
-			files++
+		// Fall through: still count staged-but-uncommitted work (the timeout
+		// case where the foreman wrote files but never committed).
+		files = countStagedFiles(dir)
+	} else {
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.TrimSpace(line) != "" {
+				files++
+			}
 		}
+		// A timeout tick may have staged-but-uncommitted work on top of any
+		// committed delta; include it so the dashboard shows real progress.
+		files += countStagedFiles(dir)
 	}
 	return commits, files
+}
+
+// countStagedFiles returns the number of files currently staged (git add) but
+// not yet committed — the work-in-progress a timed-out tick left behind.
+// Best-effort: 0 on any git error.
+func countStagedFiles(dir string) int {
+	out, err := exec.Command("git", "-C", dir, "diff", "--cached", "--name-only").Output()
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
 }

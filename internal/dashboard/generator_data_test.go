@@ -62,6 +62,66 @@ func TestReadBoardProgress_MissingFile(t *testing.T) {
 	}
 }
 
+func TestReadBoardProgress_VPrefix(t *testing.T) {
+	// The v2 milestone uses "| V01 | ..." task rows (not "| T##"). The parser
+	// must count them as tasks so the dashboard shows progress, not 0/0.
+	board := `# Project
+
+## v2 Active — milestone
+
+| ID | Task | Pri |
+|----|------|-----|
+| V01 | generic-runtime | Critical |
+| V02 | autonomous-vertical-slice | Critical |
+
+## Completed
+
+| ID | Task | Pri | Commit |
+|----|------|-----|--------|
+| V01 | bootstrap | Trivial | abc123 |
+
+## [ ] NEVER-DONE — audit
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tasks.md")
+	if err := os.WriteFile(path, []byte(board), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done, total := readBoardProgress(path)
+	if done != 1 || total != 3 {
+		t.Errorf("V-prefix board: got done=%d total=%d, want done=1 total=3", done, total)
+	}
+}
+
+func TestIsTaskRow(t *testing.T) {
+	ok := []string{
+		"| T05 | task |",
+		"| V01 | task |",
+		"| DOCS-000 | task |",
+		"| E2E-001 | task |",
+		"| GAP-003 | task |",
+		"| TEST-001 | task |",
+	}
+	for _, s := range ok {
+		if !isTaskRow(s) {
+			t.Errorf("isTaskRow(%q) = false, want true", s)
+		}
+	}
+	bad := []string{
+		"|----|------|",          // table separator
+		"| ID | Task |",          // header row
+		"## [ ] NEVER-DONE",      // heading, not a row
+		"| t05 | lowercase |",    // lowercase id
+		"| 123 | digits only |",  // starts with digit
+		"plain text",
+	}
+	for _, s := range bad {
+		if isTaskRow(s) {
+			t.Errorf("isTaskRow(%q) = true, want false", s)
+		}
+	}
+}
+
 func TestNextTickIn(t *testing.T) {
 	if got := nextTickIn(true, "2026-08-06T00:00:00Z", 900); got != "running" {
 		t.Errorf("running -> expected 'running', got %q", got)
