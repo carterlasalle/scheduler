@@ -316,14 +316,17 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		r.CostSeries = g.recentCostSeries(ctx, r.Name, 12)
 		r.RecentTicks, r.RecentFailures = g.recentTickHealth(ctx, r.Name, 10)
 		r.AvgTickSecs, r.SuccessRate, r.ETA, r.CompletionAt, r.ProjectedCost = g.observabilityStats(ctx, r.Name, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
-		// Learning ETA: predict remaining time from per-task-type durations
-		// learned from tick history + the fleet-wide prior. Prefer naive avg×steps.
+		// Learning ETA: predict remaining time + cost from per-task-type
+		// estimates learned from tick history + the fleet-wide prior.
 		if r.Workdir != "" {
 			steps := readBoardSteps(filepath.Join(r.Workdir, ".coding-hermes", "tasks.md"))
-			if learned, learnedAt, breakdown := g.learnedETA(ctx, r.Name, r.Workdir, steps, fleet); learned > 0 {
+			if learned, learnedAt, breakdown, projCost := g.learnedETA(ctx, r.Name, r.Workdir, steps, fleet); learned > 0 {
 				r.ETA = formatETA(learned)
 				r.CompletionAt = learnedAt
 				r.EtaBreakdown = breakdown
+				if projCost > 0 {
+					r.ProjectedCost = projCost
+				}
 			}
 		}
 		r.GitReinsPass = -1

@@ -136,14 +136,17 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	var rt, rf int
 	rt, rf = g.recentTickHealth(ctx, name, 10)
 	data.AvgTickSecs, data.SuccessRate, data.ETA, data.CompletionAt, data.ProjectedCost = g.observabilityStats(ctx, name, data.BoardDone, data.BoardTotal, rt, rf)
-	// Learning ETA: predict remaining time from per-task-type durations learned
-	// from tick history + the fleet-wide prior. Prefer it over naive avg×steps.
+	// Learning ETA: predict remaining time + cost from per-task-type estimates
+	// learned from tick history + the fleet-wide prior (project-biased blend).
 	if project.Workdir != "" {
 		fleet := g.fleetLearned(ctx)
-		if learned, learnedAt, breakdown := g.learnedETA(ctx, name, project.Workdir, data.BoardSteps, fleet); learned > 0 {
+		if learned, learnedAt, breakdown, projCost := g.learnedETA(ctx, name, project.Workdir, data.BoardSteps, fleet); learned > 0 {
 			data.ETA = formatETA(learned)
 			data.CompletionAt = learnedAt
 			data.EtaBreakdown = breakdown
+			if projCost > 0 {
+				data.ProjectedCost = projCost
+			}
 		}
 	}
 	// GitReins LLM-judge verdict summary (pass rate + latest verdicts).
