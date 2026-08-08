@@ -781,3 +781,36 @@ tasks:
   status: complete
   created_at: '2026-08-07T22:13:05.770515+00:00'
   completed_at: '2026-08-07T22:13:34.234985+00:00'
+- id: SCHED-GAP-013
+  title: Health panel labels actual spawn mode (HTTP vs exec fallback)
+  criteria:
+  - /api/v1/health returns spawns_http and spawns_exec counters (internal/api/server.go
+    health handler uses s.loop.SpawnMethodCounts)
+  - "The dashboard health panel labels the ACTUAL spawn mode ('exec fallback' when\
+    \ spawns_exec>0 and spawns_http==0, else 'HTTP') rather than inferring spawning\
+    \ health from a bare gateway connectivity probe \u2014 check internal/dashboard/generator.go\
+    \ GenerateHealth and templates/health.html for the SpawnMode label and spawns_http/spawns_exec\
+    \ meta line"
+  status: complete
+  created_at: '2026-08-08T19:42:10.059295+00:00'
+  completed_at: '2026-08-08T19:42:34.452568+00:00'
+- id: SCHED-GAP-014
+  title: Throttle starvation alert spam per project (>= 30 min spacing)
+  criteria:
+  - CheckStarvation in internal/scheduler/alert_escalation.go emits at most one MEDIUM
+    starvation event per project per 30-minute window (starvationThrottleWindow),
+    enforced via the events table (lastStarvationEvent query) so it survives fresh
+    escalator construction per evaluation cycle
+  - A project first crossing the 2x cooldown threshold still emits a MEDIUM 'project
+    starved' event (first crossing not suppressed)
+  - A still-starved project emits again after the 30-minute throttle window expires
+    (not suppressed forever)
+  - 'Throttle is per-project: one project''s event does not suppress another project''s
+    event'
+  - "Tests prove the throttle: consecutive CheckStarvation calls (fresh escalator\
+    \ each) emit at most once per window; window expiry re-emits; distinct projects\
+    \ each emit once (see TestAlertEscalator_CheckStarvation_Throttle*) \u2014 go\
+    \ test ./internal/scheduler/ passes"
+  status: complete
+  created_at: '2026-08-08T19:42:10.251886+00:00'
+  completed_at: '2026-08-08T19:43:29.994057+00:00'
