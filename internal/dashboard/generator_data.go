@@ -80,6 +80,12 @@ type FleetRow struct {
 	EtaBreakdown string
 	// GitReins LLM-judge verdict pass rate (0-100) over the project history.
 	GitReinsPass int // percent; -1 = no verdicts
+	// CIConclusion is the latest GitHub Actions run conclusion (success/failure/
+	// "" ) for the project's repo — an INDEPENDENT cross-check on GitReins. A
+	// GitReins 100% is only trustworthy when CI is also green; a red CI flags
+	// that the LLM-judge gate may be passing a suite that is actually failing
+	// (e.g. cached test results). "" = unknown (no CI workflow or query failed).
+	CIConclusion string
 }
 
 // TickRow is one tick in the history table.
@@ -338,6 +344,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 			if gr := readGitReins(r.Workdir, 0); gr.Total > 0 {
 				r.GitReinsPass = gr.RatePct
 			}
+			r.CIConclusion = ciConclusion(r.Workdir)
 		}
 	}
 
@@ -812,6 +819,32 @@ func formatETA(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%dm", int(d/time.Minute))
 	}
+}
+
+// ciConclusion returns the latest GitHub Actions run conclusion for the repo
+// at workdir (success / failure / "" when unknown). It is an independent
+// cross-check on the GitReins LLM-judge pass rate: the judge can report a
+// cached or LLM-asserted "green" that does not match a genuinely failing
+// suite, and a red CI is the ground truth that unmasks it. Best-effort — on
+// any error (no gh, no workflow, timeout) it returns "" so the dashboard
+// degrades gracefully.
+func ciConclusion(workdir string) string {
+	if workdir == "" {
+		return ""
+	}
+	out, err := exec.Command("gh", "-C", workdir,
+		"run", "list", "--limit", "1", "--json", "conclusion,status,headBranch",
+		"--jq", `.[0].conclusion`).Output()
+	if err != nil {
+		return ""
+	}
+	s := strings.TrimSpace(string(out))
+	if s == "" || s == "null" {
+		return ""
+	}
+	// In-progress runs have conclusion=null; treat as unknown rather than
+	// green/red so we don't mislabel a running CI.
+	return s
 }
 
 // readGitReins walks a project's .gitreins/history and returns the aggregate
