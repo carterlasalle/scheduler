@@ -107,12 +107,81 @@ func learnTypeSamples(samples []tickSample) map[TaskType]*durationSamples {
 	return learned
 }
 
+// fleetModel is the fleet-wide learned prior: per-task-type average durations
+// aggregated across ALL projects, plus the fleet overall average. A new project
+// starts from this prior and blends toward its own data as it accumulates.
+type fleetModel struct {
+	byType  map[TaskType]*durationSamples
+	overall *durationSamples // fleet-wide average across all types
+}
+
+// fleetLearned aggregates completed-tick durations across every project,
+// bucketed by task type, to form the fleet-wide prior. Returns an empty model
+// on query error so callers degrade to project-only estimates.
+func (g *Generator) fleetLearned(ctx context.Context) *fleetModel {
+	m := &fleetModel{byType: map[TaskType]*durationSamples{}, overall: &durationSamples{}}
+
+	// Map project → workdir once, so we can classify each tick's commit work.
+	wd := map[string]string{}
+	if rows, err := g.db.QueryContext(ctx, `SELECT name, COALESCE(workdir,'') FROM projects`); err == nil {
+		for rows.Next() {
+			var name, w string
+			if rows.Scan(&name, &w) == nil {
+				wd[name] = w
+			}
+		}
+		_ = rows.Close()
+	}
+
+	rows, err := g.db.QueryContext(ctx, `
+		SELECT project_name, spawned_at, completed_at FROM ticks
+		WHERE status = 'completed' AND completed_at != ''
+		ORDER BY spawned_at DESC LIMIT 200
+	`)
+	if err != nil {
+		return m
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var proj, sp, co string
+		if rows.Scan(&proj, &sp, &co) != nil {
+			continue
+		}
+		d := parseDuration(sp, co)
+		if d <= 0 {
+			continue
+		}
+		typ := classifyTaskType(tickWork(wd[proj], sp, co, 4))
+		ds := m.byType[typ]
+		if ds == nil {
+			ds = &durationSamples{}
+			m.byType[typ] = ds
+		}
+		ds.add(d)
+		m.overall.add(d)
+	}
+	for _, ds := range m.byType {
+		ds.finalize()
+	}
+	m.overall.finalize()
+	return m
+}
+
 // typeEstimate picks the best duration estimate for a pending task of the given
-// type: the learned per-type average if we have enough samples (minSamples),
-// else the project-wide average, else a conservative default.
-func typeEstimate(typ TaskType, learned map[TaskType]*durationSamples, projectAvg time.Duration, minSamples int) time.Duration {
+// type, blending the project's own learned per-type average with the fleet-wide
+// prior. A project with enough local samples dominates; a new project leans on
+// the fleet prior; then the fleet overall; then project overall; then a floor.
+func typeEstimate(typ TaskType, learned map[TaskType]*durationSamples, projectAvg time.Duration, fleet *fleetModel, minSamples int) time.Duration {
 	if ds, ok := learned[typ]; ok && ds.count >= minSamples && ds.avg > 0 {
 		return ds.avg
+	}
+	if fleet != nil {
+		if fds, ok := fleet.byType[typ]; ok && fds.count >= minSamples && fds.avg > 0 {
+			return fds.avg
+		}
+		if fleet.overall != nil && fleet.overall.count > 0 && fleet.overall.avg > 0 {
+			return fleet.overall.avg
+		}
 	}
 	if projectAvg > 0 {
 		return projectAvg
@@ -122,14 +191,15 @@ func typeEstimate(typ TaskType, learned map[TaskType]*durationSamples, projectAv
 
 // predictETA returns the remaining-time estimate for the pending board steps
 // plus a per-type breakdown (type → estimated total duration) and a per-type
-// pending-step count. It uses per-type learned durations when available and
-// falls back to the project-wide average otherwise. Done steps are ignored.
-func predictETA(pending []BoardStep, learned map[TaskType]*durationSamples, projectAvg time.Duration, minSamples int) (total time.Duration, byType map[TaskType]time.Duration, counts map[TaskType]int) {
+// pending-step count. It blends per-type project-learned durations with the
+// fleet-wide prior and falls back to the fleet/project overall average. Done
+// steps are ignored.
+func predictETA(pending []BoardStep, learned map[TaskType]*durationSamples, projectAvg time.Duration, fleet *fleetModel, minSamples int) (total time.Duration, byType map[TaskType]time.Duration, counts map[TaskType]int) {
 	byType = map[TaskType]time.Duration{}
 	counts = map[TaskType]int{}
 	for _, st := range pending {
 		typ := classifyTaskType(st.Title)
-		d := typeEstimate(typ, learned, projectAvg, minSamples)
+		d := typeEstimate(typ, learned, projectAvg, fleet, minSamples)
 		total += d
 		byType[typ] += d
 		counts[typ]++
@@ -204,7 +274,7 @@ const minLearnedSamples = 2
 //
 // Returns (eta, completionAtRFC3339, breakdown). eta is 0 when there is no
 // signal (no board or no history) so callers can fall back to the old math.
-func (g *Generator) learnedETA(ctx context.Context, project, workdir string, steps []BoardStep) (time.Duration, string, string) {
+func (g *Generator) learnedETA(ctx context.Context, project, workdir string, steps []BoardStep, fleet *fleetModel) (time.Duration, string, string) {
 	if project == "" || len(steps) == 0 {
 		return 0, "", ""
 	}
@@ -249,7 +319,7 @@ func (g *Generator) learnedETA(ctx context.Context, project, workdir string, ste
 		return 0, "", ""
 	}
 
-	total, byType, counts := predictETA(pending, learned, projectAvg, minLearnedSamples)
+	total, byType, counts := predictETA(pending, learned, projectAvg, fleet, minLearnedSamples)
 	if total <= 0 {
 		return 0, "", ""
 	}

@@ -309,16 +309,18 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	// Done AFTER the project rows cursor is fully closed — the modernc.org/sqlite
 	// driver deadlocks if we open nested queries on the same connection while a
 	// rows cursor is still open (the collect() N+1 warning).
+	// The fleet-wide learned prior is built ONCE and shared across all projects.
+	fleet := g.fleetLearned(ctx)
 	for i := range data.Projects {
 		r := &data.Projects[i]
 		r.CostSeries = g.recentCostSeries(ctx, r.Name, 12)
 		r.RecentTicks, r.RecentFailures = g.recentTickHealth(ctx, r.Name, 10)
 		r.AvgTickSecs, r.SuccessRate, r.ETA, r.CompletionAt, r.ProjectedCost = g.observabilityStats(ctx, r.Name, r.BoardDone, r.BoardTotal, r.RecentTicks, r.RecentFailures)
 		// Learning ETA: predict remaining time from per-task-type durations
-		// learned from tick history. Prefer it over the naive avg×steps.
+		// learned from tick history + the fleet-wide prior. Prefer naive avg×steps.
 		if r.Workdir != "" {
 			steps := readBoardSteps(filepath.Join(r.Workdir, ".coding-hermes", "tasks.md"))
-			if learned, learnedAt, breakdown := g.learnedETA(ctx, r.Name, r.Workdir, steps); learned > 0 {
+			if learned, learnedAt, breakdown := g.learnedETA(ctx, r.Name, r.Workdir, steps, fleet); learned > 0 {
 				r.ETA = formatETA(learned)
 				r.CompletionAt = learnedAt
 				r.EtaBreakdown = breakdown

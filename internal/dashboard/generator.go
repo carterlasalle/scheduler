@@ -137,9 +137,10 @@ func (g *Generator) GenerateProjectDetail(w io.Writer, name string) error {
 	rt, rf = g.recentTickHealth(ctx, name, 10)
 	data.AvgTickSecs, data.SuccessRate, data.ETA, data.CompletionAt, data.ProjectedCost = g.observabilityStats(ctx, name, data.BoardDone, data.BoardTotal, rt, rf)
 	// Learning ETA: predict remaining time from per-task-type durations learned
-	// from tick history. Prefer it over the naive avg×steps when it has signal.
+	// from tick history + the fleet-wide prior. Prefer it over naive avg×steps.
 	if project.Workdir != "" {
-		if learned, learnedAt, breakdown := g.learnedETA(ctx, name, project.Workdir, data.BoardSteps); learned > 0 {
+		fleet := g.fleetLearned(ctx)
+		if learned, learnedAt, breakdown := g.learnedETA(ctx, name, project.Workdir, data.BoardSteps, fleet); learned > 0 {
 			data.ETA = formatETA(learned)
 			data.CompletionAt = learnedAt
 			data.EtaBreakdown = breakdown
