@@ -131,7 +131,10 @@ func (l *Loop) evaluate() {
 
 	// Alert escalation runs while pool processes ticks.
 	if len(packed) > 0 {
-		escalator := NewAlertEscalator(l.db, l.events)
+		l.mu.RLock()
+		policy := l.autoDisablePolicy
+		l.mu.RUnlock()
+		escalator := NewAlertEscalator(l.db, l.events, policy)
 		if err := escalator.RunAll(context.Background(), now); err != nil {
 			log.Printf("EVAL: escalation check error: %v", err)
 		}

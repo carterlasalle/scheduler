@@ -30,6 +30,12 @@ type Loop struct {
 	gatewayClient   *GatewayClient // HTTP client for Gateway API (FIX-STUCK)
 	gatewayDead     bool           // true when last ping failed
 
+	// autoDisablePolicy holds the configurable per-project failure-rate
+	// auto-disable settings (SCHED-GAP-018). When the failure-rate threshold
+	// is > 0, the escalator disables projects whose recent failure rate meets
+	// or exceeds it. Zero = feature off.
+	autoDisablePolicy autoDisablePolicy
+
 	mu         sync.RWMutex
 	running    sync.WaitGroup
 	stopCh     chan struct{}
@@ -39,6 +45,25 @@ type Loop struct {
 	simulate   bool
 	simSuccess float64
 	noDeliver  bool // suppress Telegram delivery (verify mode, tests)
+}
+
+// autoDisablePolicy is the configurable failure-rate auto-disable policy.
+type autoDisablePolicy struct {
+	failureRate float64 // 0 = off; 0.0–1.0 threshold
+	window      int     // ticks per project to examine
+	minTicks    int     // minimum sample size before disable can fire
+}
+
+// SetAutoDisablePolicy configures the per-project failure-rate auto-disable
+// policy (SCHED-GAP-018). A failureRate of 0 or less disables the feature.
+func (l *Loop) SetAutoDisablePolicy(failureRate float64, window, minTicks int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.autoDisablePolicy = autoDisablePolicy{
+		failureRate: failureRate,
+		window:      window,
+		minTicks:    minTicks,
+	}
 }
 
 // SetNoDeliver suppresses Telegram delivery of tick output.
