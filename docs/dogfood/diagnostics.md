@@ -18,7 +18,7 @@ the repo, not from test colors.
   budget with multi-pool namespace mode → spawn via Hermes gateway HTTP API
   (`POST /v1/responses`, `require_approval:false`) with `--no-exec-fallback`
   exec spawn as fallback. Cooldown per project; timeout does NOT back off
-  (deliberate); no auto-disable (deliberate, except 10+ consecutive timeouts/24h).
+  (deliberate); configurable auto-disable (SCHED-GAP-018, default off — `--auto-disable-failure-rate` > 0 to enable; the 10+ consecutive timeouts/24h safety net remains).
 - **REST API** (`internal/api/`): 20 method/path ops under `/api/v1` — health,
   status, projects CRUD-ish (no delete), ticks, events, namespaces, evaluate,
   pause/resume. **MCP** (`internal/mcp/`) JSON-RPC on `/mcp` with fleet_* tools.

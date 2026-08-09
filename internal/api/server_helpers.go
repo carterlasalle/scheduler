@@ -53,6 +53,84 @@ func countRecentOutcomes(ctx context.Context, db *sql.DB) map[string]int {
 	return out
 }
 
+// ProjectFailureRate is the per-project failure-rate breakdown for a single
+// project over a window of recent ticks. It appears in /api/v1/status under
+// the "projects_failure_rates" key (SCHED-GAP-018).
+type ProjectFailureRate struct {
+	Failed      int     `json:"failed"`
+	Total       int     `json:"total"`
+	FailureRate float64 `json:"failure_rate"`
+}
+
+// computeProjectFailureRates returns a per-project failure-rate breakdown
+// computed over the last `window` completed ticks per project. Only projects
+// with at least one tick in the window are included. "failed" counts both
+// 'failed' and 'timeout' statuses (both are waste — non-completed outcomes).
+// "total" is the number of ticks in the window with a non-null completed_at
+// (running/queued ticks are excluded). failure_rate = failed/total, rounded
+// to 4 decimal places.
+func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int) map[string]ProjectFailureRate {
+	if window <= 0 {
+		window = 100
+	}
+	out := map[string]ProjectFailureRate{}
+
+	// For each project, select the most recent `window` completed ticks and
+	// count how many are failed/timeout vs total. Using a correlated subquery
+	// with LIMIT inside a window function would be cleaner, but SQLite's
+	// LIMIT inside a subquery is well-supported and avoids the row_number()
+	// complexity. We do it in Go for clarity and to keep the query portable.
+	projects, err := db.QueryContext(ctx,
+		`SELECT DISTINCT project_name FROM ticks WHERE completed_at IS NOT NULL`)
+	if err != nil {
+		return out
+	}
+	defer projects.Close()
+
+	var names []string
+	for projects.Next() {
+		var name string
+		if err := projects.Scan(&name); err == nil {
+			names = append(names, name)
+		}
+	}
+
+	for _, name := range names {
+		rows, err := db.QueryContext(ctx,
+			`SELECT status FROM ticks
+			 WHERE project_name = ? AND completed_at IS NOT NULL
+			 ORDER BY spawned_at DESC LIMIT ?`,
+			name, window)
+		if err != nil {
+			continue
+		}
+		var failed, total int
+		for rows.Next() {
+			var status string
+			if err := rows.Scan(&status); err != nil {
+				continue
+			}
+			total++
+			if status == "failed" || status == "timeout" {
+				failed++
+			}
+		}
+		rows.Close()
+		if total == 0 {
+			continue
+		}
+		rate := float64(failed) / float64(total)
+		// Round to 4 decimal places for clean JSON output.
+		rate = float64(int(rate*10000)) / 10000
+		out[name] = ProjectFailureRate{
+			Failed:      failed,
+			Total:       total,
+			FailureRate: rate,
+		}
+	}
+	return out
+}
+
 func getLatestTick(ctx context.Context, db *sql.DB, project string) (*database.Tick, error) {
 	row := db.QueryRowContext(ctx, `
 		SELECT id, project_name, COALESCE(session_id,'') as session_id, status,

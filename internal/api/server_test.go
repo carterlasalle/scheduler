@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -178,6 +179,106 @@ func TestAPI_Status(t *testing.T) {
 	}
 	if _, ok := body["active_ticks"]; !ok {
 		t.Errorf("active_ticks missing")
+	}
+}
+
+// TestAPI_Status_ProjectsFailureRates (SCHED-GAP-018) verifies the
+// projects_failure_rates field is present in /api/v1/status with the correct
+// shape and per-project failure-rate math.
+func TestAPI_Status_ProjectsFailureRates(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+	mustCreateAPITestProject(t, a.db, "beta")
+
+	// alpha: 8 failed + 2 completed = 80% failure rate over 10 ticks.
+	now := time.Now()
+	for i := 0; i < 8; i++ {
+		insertAPITestTick(t, a.db, "alpha-fail-"+strconv.Itoa(i), "alpha", "failed",
+			now.Add(-time.Duration(10-i)*time.Minute))
+	}
+	for i := 0; i < 2; i++ {
+		insertAPITestTick(t, a.db, "alpha-ok-"+strconv.Itoa(i), "alpha", "completed",
+			now.Add(-time.Duration(2-i)*time.Minute))
+	}
+	// beta: 5 completed = 0% failure rate.
+	for i := 0; i < 5; i++ {
+		insertAPITestTick(t, a.db, "beta-ok-"+strconv.Itoa(i), "beta", "completed",
+			now.Add(-time.Duration(5-i)*time.Minute))
+	}
+
+	status, body := a.do(t, "GET", "/api/v1/status", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+
+	// failure_window should be present and an integer (default 100).
+	fw, ok := body["failure_window"]
+	if !ok {
+		t.Fatalf("failure_window missing from status response: %v", body)
+	}
+	if n, ok := fw.(float64); !ok || int(n) != 100 {
+		t.Errorf("failure_window = %v, want 100", fw)
+	}
+
+	// projects_failure_rates should be present and a map.
+	rates, ok := body["projects_failure_rates"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("projects_failure_rates missing or wrong type: %T", body["projects_failure_rates"])
+	}
+
+	// alpha: {failed: 8, total: 10, failure_rate: 0.8}
+	alpha, ok := rates["alpha"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("alpha missing from projects_failure_rates: %v", rates)
+	}
+	if failed, ok := alpha["failed"].(float64); !ok || int(failed) != 8 {
+		t.Errorf("alpha failed = %v, want 8", alpha["failed"])
+	}
+	if total, ok := alpha["total"].(float64); !ok || int(total) != 10 {
+		t.Errorf("alpha total = %v, want 10", alpha["total"])
+	}
+	if rate, ok := alpha["failure_rate"].(float64); !ok || rate != 0.8 {
+		t.Errorf("alpha failure_rate = %v, want 0.8", alpha["failure_rate"])
+	}
+
+	// beta: {failed: 0, total: 5, failure_rate: 0}
+	beta, ok := rates["beta"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("beta missing from projects_failure_rates: %v", rates)
+	}
+	if rate, ok := beta["failure_rate"].(float64); !ok || rate != 0 {
+		t.Errorf("beta failure_rate = %v, want 0", beta["failure_rate"])
+	}
+}
+
+// TestAPI_Status_ProjectsFailureRates_Empty verifies the field is present
+// even when there are no ticks.
+func TestAPI_Status_ProjectsFailureRates_Empty(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+
+	status, body := a.do(t, "GET", "/api/v1/status", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	rates, ok := body["projects_failure_rates"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("projects_failure_rates missing or wrong type: %T", body["projects_failure_rates"])
+	}
+	if len(rates) != 0 {
+		t.Errorf("expected empty projects_failure_rates, got %v", rates)
+	}
+}
+
+// insertAPITestTick inserts a tick row directly into the DB for status tests.
+func insertAPITestTick(t *testing.T, db *sql.DB, id, project, status string, spawnedAt time.Time) {
+	t.Helper()
+	ts := spawnedAt.Format(time.RFC3339)
+	_, err := db.Exec(
+		`INSERT INTO ticks (id, project_name, status, completed_at, spawned_at, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, project, status, ts, ts, ts)
+	if err != nil {
+		t.Fatalf("insert tick %s: %v", id, err)
 	}
 }
 

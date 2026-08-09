@@ -49,6 +49,10 @@ func main() {
 	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 14 dry-run projects")
 	simTicks := flag.Int("sim-ticks", 10, "Number of evaluation ticks to run in sim-setup mode")
 	configFile := flag.String("config", "", "Path to TOML fleet config file")
+	failureWindow := flag.Int("failure-window", 100, "Number of recent ticks per project for /api/v1/status per-project failure-rate breakdown")
+	autoDisableRate := flag.Float64("auto-disable-failure-rate", 0, "Per-project failure-rate threshold (0.0–1.0) for auto-disable; 0 = off (SCHED-GAP-018)")
+	autoDisableWindow := flag.Int("auto-disable-window", 100, "Ticks per project over which auto-disable failure rate is computed")
+	autoDisableMinTicks := flag.Int("auto-disable-min-ticks", 50, "Minimum ticks in window before auto-disable can fire")
 	logFile := flag.String("log-file", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.log"), "Path to append structured tick logs (JSON lines); empty disables")
 	showConfigFlag := flag.Bool("show-config", false, "Print resolved config (CLI + env) as TOML and exit")
 	schemaFlag := flag.Bool("schema", false, "Output JSON Schema for schedulerd.toml and exit")
@@ -68,6 +72,30 @@ func main() {
 
 	if os.Getenv("SCHEDULER_NAMESPACE_MODE") == "true" {
 		*namespaceMode = true
+	}
+
+	// SCHED-GAP-018: auto-disable config — SCHEDULER_* env vars override CLI
+	// flag defaults (Layer 2 > Layer 3 per the three-layer model). We resolve
+	// before the loop is created.
+	if v := os.Getenv("SCHEDULER_FAILURE_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			*failureWindow = n
+		}
+	}
+	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			*autoDisableRate = f
+		}
+	}
+	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			*autoDisableWindow = n
+		}
+	}
+	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_MIN_TICKS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			*autoDisableMinTicks = n
+		}
 	}
 
 	// ── Test-verify mode: run correctness checks and exit ──
@@ -136,6 +164,31 @@ func main() {
 			loop.SetBlackoutWindows(rootCfg.Scheduler.BlackoutWindows)
 			log.Printf("Blackout: loaded %d windows", len(rootCfg.Scheduler.BlackoutWindows))
 		}
+	}
+
+	// SCHED-GAP-018: auto-disable + failure-rate window. Apply TOML values
+	// first (Layer 1), then CLI/env overrides (already resolved above) win.
+	if *configFile != "" {
+		if rootCfg, err := config.LoadRootConfig(*configFile); err == nil {
+			if rootCfg.Scheduler.AutoDisableWindow > 0 && *autoDisableWindow == 100 {
+				*autoDisableWindow = rootCfg.Scheduler.AutoDisableWindow
+			}
+			if rootCfg.Scheduler.AutoDisableMinTicks > 0 && *autoDisableMinTicks == 50 {
+				*autoDisableMinTicks = rootCfg.Scheduler.AutoDisableMinTicks
+			}
+			if rootCfg.Scheduler.FailureWindow > 0 && *failureWindow == 100 {
+				*failureWindow = rootCfg.Scheduler.FailureWindow
+			}
+			if rootCfg.Scheduler.AutoDisableFailureRate > 0 && *autoDisableRate == 0 {
+				*autoDisableRate = rootCfg.Scheduler.AutoDisableFailureRate
+			}
+		}
+	}
+	loop.SetAutoDisablePolicy(*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks)
+	if *autoDisableRate > 0 {
+		log.Printf("AUTO-DISABLE: enabled — rate=%.2f window=%d min_ticks=%d", *autoDisableRate, *autoDisableWindow, *autoDisableMinTicks)
+	} else {
+		log.Printf("AUTO-DISABLE: off (rate=0)")
 	}
 
 	// Wire gateway HTTP client with retry (FEAT-003).
@@ -215,6 +268,7 @@ func main() {
 	// starts later in background (see below).
 	duckbrain := sync.NewDuckBrainSync(db, *duckbrainNS, *duckbrainURL)
 	apiServer := api.NewServer(db, loop)
+	apiServer.SetFailureWindow(*failureWindow)
 	apiServer.SetDuckBrainHealth(func() map[string]interface{} {
 		h := duckbrain.Health()
 		return map[string]interface{}{

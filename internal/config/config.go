@@ -57,6 +57,23 @@ type SchedulerConfig struct {
 	TickTimeout     string           `toml:"tick_timeout"`
 	NamespaceMode   bool             `toml:"namespace_mode"`
 	BlackoutWindows []BlackoutWindow `toml:"blackout_windows"`
+
+	// AutoDisableFailureRate (0.0–1.0) is the per-project failure-rate
+	// threshold over the last AutoDisableWindow ticks at or above which the
+	// scheduler will disable the project automatically. Default 0 = feature
+	// off (SCHED-GAP-018). Operators opt in.
+	AutoDisableFailureRate float64 `toml:"auto_disable_failure_rate"`
+	// AutoDisableWindow is the number of recent ticks (per project) over
+	// which the failure rate is computed for auto-disable.
+	AutoDisableWindow int `toml:"auto_disable_window"`
+	// AutoDisableMinTicks is the minimum number of ticks a project must have
+	// within the window before it can be auto-disabled (sample-size guard).
+	AutoDisableMinTicks int `toml:"auto_disable_min_ticks"`
+	// FailureWindow is the number of recent ticks (per project) used by the
+	// /api/v1/status per-project failure-rate breakdown. Independent of the
+	// auto-disable window so the dashboard can stay readable even when
+	// auto-disable is off.
+	FailureWindow int `toml:"failure_window"`
 }
 
 // BlackoutWindow defines a peak-pricing window during which the scheduler

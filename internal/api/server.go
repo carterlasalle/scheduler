@@ -16,6 +16,11 @@ type Server struct {
 	loop    *scheduler.Loop
 	started time.Time
 
+	// failureWindow is the number of recent ticks (per project) over which
+	// the /api/v1/status per-project failure-rate breakdown is computed.
+	// Zero or negative = default of 100.
+	failureWindow int
+
 	// duckbrainHealth, when set, is called to include DuckBrain sync health
 	// in /api/v1/status. Kept as a func so the API package doesn't import
 	// the sync package (no dependency cycle; nil = feature off).
@@ -25,9 +30,18 @@ type Server struct {
 // NewServer creates an API server.
 func NewServer(db *sql.DB, loop *scheduler.Loop) *Server {
 	return &Server{
-		db:      db,
-		loop:    loop,
-		started: time.Now(),
+		db:            db,
+		loop:          loop,
+		started:       time.Now(),
+		failureWindow: 100, // default; override via SetFailureWindow
+	}
+}
+
+// SetFailureWindow sets the number of recent ticks per project used for the
+// /api/v1/status per-project failure-rate breakdown (SCHED-GAP-018).
+func (s *Server) SetFailureWindow(n int) {
+	if n > 0 {
+		s.failureWindow = n
 	}
 }
 
@@ -109,13 +123,16 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	activeTicks := countActiveTicks(ctx, s.db)
 	recentOutcomes := countRecentOutcomes(ctx, s.db)
+	failureRates := computeProjectFailureRates(ctx, s.db, s.failureWindow)
 	lastEval := getLastEvalTime(ctx, s.db)
 	status := map[string]interface{}{
-		"budget_total":    100,
-		"active_projects": len(projects),
-		"active_ticks":    activeTicks,
-		"recent_outcomes": recentOutcomes,
-		"last_evaluation": lastEval,
+		"budget_total":           100,
+		"active_projects":        len(projects),
+		"active_ticks":           activeTicks,
+		"recent_outcomes":        recentOutcomes,
+		"projects_failure_rates": failureRates,
+		"failure_window":         s.failureWindow,
+		"last_evaluation":        lastEval,
 	}
 	if s.duckbrainHealth != nil {
 		status["duckbrain"] = s.duckbrainHealth()

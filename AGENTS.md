@@ -133,7 +133,8 @@ The daemon's default DB path is `~/.hermes/coding-hermes/scheduler.db` (`--db` f
 ## Key Design Decisions
 
 - **No timeout backoff.** Timeout means try again at normal cooldown — do not escalate.
-- **No auto-disable.** Only human command or scheduler daemon after 10+ consecutive timeouts over 24h.
+- **Configurable auto-disable (SCHED-GAP-018, default off).** When `--auto-disable-failure-rate` > 0 (e.g. 0.95 = 95%), a project whose recent failure rate (failed+timeout over the last `--auto-disable-window` ticks, default 100) meets or exceeds the threshold AND has at least `--auto-disable-min-ticks` (default 50) ticks in the window is automatically disabled. A HIGH event is emitted to the events table on disable. Operators must explicitly opt in; the default (0) leaves the feature off. The same flags are available as TOML `[scheduler]` keys (`auto_disable_failure_rate`, `auto_disable_window`, `auto_disable_min_ticks`) and env vars (`SCHEDULER_AUTO_DISABLE_FAILURE_RATE` etc.). The existing 10+ consecutive-timeout/24h safety net remains.
+- **Per-project failure-rate visibility (SCHED-GAP-018).** `GET /api/v1/status` now includes `projects_failure_rates` (per-project breakdown over the last `--failure-window` ticks) and `failure_window` fields, so per-project failure rates stay observable without manual SQL.
 - **Foremen never use delegate_task.** Workers are spawned via `hermes chat -q` with independent model/provider selection.
 
 ## Project Conventions

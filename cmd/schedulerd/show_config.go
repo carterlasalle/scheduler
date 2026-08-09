@@ -34,7 +34,11 @@ func printSchema() {
         "weight_budget":  { "type": "integer", "default": 100, "minimum": 1, "env": "SCHEDULER_BUDGET", "cli": "--budget" },
         "max_concurrent": { "type": "integer", "default": 10, "minimum": 1, "env": "SCHEDULER_MAX_CONCURRENT", "cli": "--max-concurrent" },
         "tick_timeout":   { "type": "string", "default": "2h", "env": "SCHEDULER_TICK_TIMEOUT", "cli": "--tick-timeout" },
-        "namespace_mode": { "type": "boolean", "default": false, "env": "SCHEDULER_NAMESPACE_MODE", "cli": "--namespace-mode" }
+        "namespace_mode": { "type": "boolean", "default": false, "env": "SCHEDULER_NAMESPACE_MODE", "cli": "--namespace-mode" },
+        "auto_disable_failure_rate": { "type": "number", "default": 0.0, "minimum": 0.0, "maximum": 1.0, "description": "Per-project failure-rate threshold (0 = off). SCHED-GAP-018.", "env": "SCHEDULER_AUTO_DISABLE_FAILURE_RATE", "cli": "--auto-disable-failure-rate" },
+        "auto_disable_window":       { "type": "integer", "default": 100, "minimum": 1, "description": "Ticks per project over which auto-disable failure rate is computed.", "env": "SCHEDULER_AUTO_DISABLE_WINDOW", "cli": "--auto-disable-window" },
+        "auto_disable_min_ticks":    { "type": "integer", "default": 50, "minimum": 1, "description": "Minimum ticks in window before auto-disable can fire.", "env": "SCHEDULER_AUTO_DISABLE_MIN_TICKS", "cli": "--auto-disable-min-ticks" },
+        "failure_window":            { "type": "integer", "default": 100, "minimum": 1, "description": "Ticks per project for /api/v1/status per-project failure-rate breakdown.", "env": "SCHEDULER_FAILURE_WINDOW", "cli": "--failure-window" }
       }
     },
     "gateway": {
@@ -144,20 +148,24 @@ url = %q
 
 	// Print env var overrides
 	envVars := map[string]string{
-		"SCHEDULER_DB_PATH":        os.Getenv("SCHEDULER_DB_PATH"),
-		"SCHEDULER_LISTEN":         os.Getenv("SCHEDULER_LISTEN"),
-		"SCHEDULER_MIN_INTERVAL":   os.Getenv("SCHEDULER_MIN_INTERVAL"),
-		"SCHEDULER_MAX_INTERVAL":   os.Getenv("SCHEDULER_MAX_INTERVAL"),
-		"SCHEDULER_NUM_LEVELS":     os.Getenv("SCHEDULER_NUM_LEVELS"),
-		"SCHEDULER_BUDGET":         os.Getenv("SCHEDULER_BUDGET"),
-		"SCHEDULER_MAX_CONCURRENT": os.Getenv("SCHEDULER_MAX_CONCURRENT"),
-		"SCHEDULER_TICK_TIMEOUT":   os.Getenv("SCHEDULER_TICK_TIMEOUT"),
-		"SCHEDULER_NAMESPACE_MODE": os.Getenv("SCHEDULER_NAMESPACE_MODE"),
-		"SCHEDULER_GATEWAY_URL":    os.Getenv("SCHEDULER_GATEWAY_URL"),
-		"SCHEDULER_GATEWAY_KEY":    os.Getenv("SCHEDULER_GATEWAY_KEY"),
-		"SCHEDULER_FOREMAN_HOME":   os.Getenv("SCHEDULER_FOREMAN_HOME"),
-		"SCHEDULER_DUCK_BRAIN_NS":  os.Getenv("SCHEDULER_DUCK_BRAIN_NS"),
-		"SCHEDULER_DUCK_BRAIN_URL": os.Getenv("SCHEDULER_DUCK_BRAIN_URL"),
+		"SCHEDULER_DB_PATH":                   os.Getenv("SCHEDULER_DB_PATH"),
+		"SCHEDULER_LISTEN":                    os.Getenv("SCHEDULER_LISTEN"),
+		"SCHEDULER_MIN_INTERVAL":              os.Getenv("SCHEDULER_MIN_INTERVAL"),
+		"SCHEDULER_MAX_INTERVAL":              os.Getenv("SCHEDULER_MAX_INTERVAL"),
+		"SCHEDULER_NUM_LEVELS":                os.Getenv("SCHEDULER_NUM_LEVELS"),
+		"SCHEDULER_BUDGET":                    os.Getenv("SCHEDULER_BUDGET"),
+		"SCHEDULER_MAX_CONCURRENT":            os.Getenv("SCHEDULER_MAX_CONCURRENT"),
+		"SCHEDULER_TICK_TIMEOUT":              os.Getenv("SCHEDULER_TICK_TIMEOUT"),
+		"SCHEDULER_NAMESPACE_MODE":            os.Getenv("SCHEDULER_NAMESPACE_MODE"),
+		"SCHEDULER_AUTO_DISABLE_FAILURE_RATE": os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"),
+		"SCHEDULER_AUTO_DISABLE_WINDOW":       os.Getenv("SCHEDULER_AUTO_DISABLE_WINDOW"),
+		"SCHEDULER_AUTO_DISABLE_MIN_TICKS":    os.Getenv("SCHEDULER_AUTO_DISABLE_MIN_TICKS"),
+		"SCHEDULER_FAILURE_WINDOW":            os.Getenv("SCHEDULER_FAILURE_WINDOW"),
+		"SCHEDULER_GATEWAY_URL":               os.Getenv("SCHEDULER_GATEWAY_URL"),
+		"SCHEDULER_GATEWAY_KEY":               os.Getenv("SCHEDULER_GATEWAY_KEY"),
+		"SCHEDULER_FOREMAN_HOME":              os.Getenv("SCHEDULER_FOREMAN_HOME"),
+		"SCHEDULER_DUCK_BRAIN_NS":             os.Getenv("SCHEDULER_DUCK_BRAIN_NS"),
+		"SCHEDULER_DUCK_BRAIN_URL":            os.Getenv("SCHEDULER_DUCK_BRAIN_URL"),
 	}
 	activeEnvs := false
 	for name, val := range envVars {
