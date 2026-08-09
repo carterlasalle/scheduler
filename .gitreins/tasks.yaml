@@ -814,3 +814,18 @@ tasks:
   status: complete
   created_at: '2026-08-08T19:42:10.251886+00:00'
   completed_at: '2026-08-08T19:43:29.994057+00:00'
+- id: SCHED-GAP-017
+  title: Foreman spawn prompt references the JSONL board instead of stale root tasks.md
+  criteria:
+  - "internal/scheduler/spawn.go prompt assembly no longer contains the literal 'Read\
+    \ .coding-hermes/tasks.md.' \u2014 the prompt references .coding-hermes/board/tasks.jsonl\
+    \ as the board source (JSONL-canonical), with a fallback to .coding-hermes/tasks.md\
+    \ for tracked-markdown boards"
+  - internal/scheduler/spawn_test.go BenchmarkSpawn_Prep mirror carries the exact
+    same prompt literal as spawn.go (strings in sync)
+  - go build ./... passes and go test -short -p 1 ./internal/scheduler/ passes
+  - gitreins guard tier1 (secrets, go_build, go_lint, go_tests) passes on the fix
+    commit
+  status: complete
+  created_at: ''
+  completed_at: '2026-08-09T14:02:17.089585+00:00'
