@@ -41,7 +41,7 @@ dispatches foreman ticks for 40+ projects. It exposes REST on
 | Route | Use |
 |---|---|
 | `GET /api/v1/health` | liveness + DB + active tick count |
-| `GET /api/v1/status` | fleet summary; fields: `active_projects`, `active_ticks`, `budget_total`, `recent_outcomes`, `duckbrain` |
+| `GET /api/v1/status` | fleet summary; fields: `active_projects`, `active_ticks`, `budget_total`, `recent_outcomes`, `projects_failure_rates` (per-project failed/total/failure_rate over last `failure_window` ticks, default 100), `failure_window`, `duckbrain` |
 | `GET /api/v1/projects` | list (PascalCase); filter nothing server-side |
 | `GET /api/v1/projects/{name}` | detail + `latest_tick`; 404 `{"error":"project not found"}` |
 | `PUT /api/v1/projects/{name}` | partial update (PascalCase keys) |
