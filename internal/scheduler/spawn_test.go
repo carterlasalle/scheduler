@@ -238,7 +238,7 @@ func BenchmarkSpawn_Prep(b *testing.B) {
 		_ = fmt.Sprintf(
 			"[Scheduler tick: %s] "+
 				"Load skills coding-hermes-foreman, coding-hermes-cron, hilo-usage, gitreins. "+
-				"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
+				"Read the project board: .coding-hermes/board/tasks.jsonl if present (JSONL-canonical), else .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
 				"Workdir: %s. "+
 				"IMPORTANT: You are a FOREMAN, not a worker. Browser/interactive work belongs in workers (delegate). "+
 				"Format your final output as clean, well-structured markdown with tables and sections. "+
