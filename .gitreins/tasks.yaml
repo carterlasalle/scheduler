@@ -843,3 +843,50 @@ tasks:
   status: complete
   created_at: '2026-08-09T22:48:02.634282+00:00'
   completed_at: '2026-08-09T22:48:05.323554+00:00'
+- id: SCHED-GAP-019
+  title: Board-aware pending-task urgency boost in EVAL selection
+  criteria:
+  - PendingTaskCounter (internal/scheduler/board_awareness.go) reads workdir/.coding-hermes/board/tasks.jsonl
+    and counts objects with status==pending; falls back to .coding-hermes/tasks.md
+    lines starting with '## [ ] '; returns 0 when no board file exists; malformed
+    JSONL lines are skipped without crashing
+  - 'pendingBoostUrgency=5e11 sits BELOW starvationBoostUrgency=1e12 and far above
+    organic urgency (~12k): pendingBoostUrgencyFor(pending) = 5e11 + min(pending,1000)'
+  - "Boost wired into ALL THREE selection paths right after the isStarving block,\
+    \ in the scoring loop only: MultiPoolPacker.Pack (packer_select.go), packFlat\
+    \ (multipool_packer.go), Packer.Pick (packer.go) \u2014 cooldown checks are never\
+    \ bypassed"
+  - Cache is thread-safe (sync.Mutex) with mtime-change detection + 60s TTL; PENDING-BOOST
+    log line emitted only when the cached count for a workdir changes (no per-eval
+    spam)
+  - 'Tests: CountPending unit tests (JSONL pending/complete/malformed, markdown fallback,
+    missing board -> 0, mtime re-read) + pack-level integration tests proving a pending-boosted
+    project wins a single slot over a higher-priority idle project in BOTH namespace
+    Pack and flat paths + starvation-beats-pending precedence test'
+  - go build ./..., go vet ./..., gofmt -l . empty, go test -short -p 1 -count=1 -timeout
+    120s ./... 9/9 packages pass, gitreins guard PASS 4/4
+  - 'Commit a47075f is path-limited to internal/scheduler/ and carries the Co-authored-by:
+    Alexis Okuwa trailer'
+  status: complete
+  created_at: '2026-08-10T01:17:44.077658+00:00'
+  completed_at: '2026-08-10T01:17:48.041008+00:00'
+- id: SCHED-GAP-021
+  title: Project-aware slot release in SlotPool - out-of-order tick completions no
+    longer evict still-running projects' markers
+  criteria:
+  - 'SlotPool.Release() is project-scoped: signature Release(name string), Spawn defers
+    p.Release(proj.Name), all call sites (non-test + tests) updated'
+  - RunningSet reflects the true running set via a mutex-guarded refcount map; releasing
+    an absent name is a no-op that never frees another project's marker; sem stays
+    a pure counting channel
+  - 'Regression tests cover out-of-order completion with a long-running project: TestSlotPool_ReleaseOutOfOrderPreservesMarkers
+    (acquire A,B,C; release B -> {A,C}), TestSlotPool_ReleaseUnknownNameIsNoOp (ghost
+    release frees nothing), TestSlotPool_OutOfOrderCompletionKeepsRunningMarker (Spawn-level:
+    slow tick keeps its marker while a fast tick completes out of order)'
+  - go build ./..., go vet ./..., gofmt -l . empty, go test -short -p 1 -count=1 -timeout
+    120s ./... 9/9 packages PASS, gitreins guard PASS 4/4
+  - 'Commit 1625c3d is path-limited to internal/scheduler/ and carries the Co-authored-by:
+    Alexis Okuwa trailer'
+  status: complete
+  created_at: '2026-08-10T04:10:58.207015+00:00'
+  completed_at: '2026-08-10T04:11:06.744328+00:00'
