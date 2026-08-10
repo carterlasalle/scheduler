@@ -368,8 +368,12 @@ func LoadRootConfig(path string) (*RootConfig, error) {
 }
 
 // ApplyFleetConfig seeds the namespaces and projects defined in cfg into db.
-// Rows that already exist are left untouched — this is a create-only upsert,
-// never an overwrite, so operator-made tweaks survive restarts.
+// Namespaces are create-only (existing rows are skipped), but EXISTING
+// projects are re-pinned from fleet.toml at every startup: cooldown, model,
+// provider, and enabled are overwritten with the fleet.toml values. fleet.toml
+// is therefore the durable cooldown pin across restarts — API-side tweaks to
+// a pinned project survive only until the next restart (see the pin block
+// below; fleet-cooldown-policy.py is the only writer of fleet.toml).
 //
 // Namespaces are applied first so that any project referencing one by id
 // resolves cleanly.

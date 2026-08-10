@@ -2,9 +2,12 @@
 // seeding namespaces and projects at scheduler startup.
 //
 // A fleet.toml is loaded once at boot via the --config flag and upserted
-// into the existing SQLite database. Upsert here means create-only: rows
-// that already exist are left untouched so operator-made tweaks survive
-// restarts.
+// into the existing SQLite database. Namespaces are create-only (existing
+// rows are skipped), but EXISTING projects are re-pinned from fleet.toml at
+// every startup — cooldown, model, provider, and enabled are overwritten with
+// the fleet.toml values (see ApplyFleetConfig). fleet.toml is therefore the
+// durable pin source across restarts: API-side tweaks to a pinned project
+// survive only until the next restart.
 //
 // FEAT-005 extends this with a three-layer configuration model covering
 // daemon, scheduler, gateway, and duckbrain settings. Resolution priority

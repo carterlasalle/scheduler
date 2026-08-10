@@ -189,5 +189,17 @@ Exit 0 = all checks pass. Logs land in `deploy/verify-*.log`. CI runs the same
   `"latest_tick"`; `POST/PUT` return the project object flat. Do not copy one
   parsing shape into the other.
 - New projects are disabled by default — resume them before expecting ticks.
-- The scheduler evaluates every 60s; cooldown drift is possible if `fleet.toml`
-  pins values that contradict API-set ones (fleet config re-applies on restart).
+- The scheduler evaluates every 60s. Cooldown authority model (code-verified
+  in `internal/config/loader.go`, SCHED-GAP-025): `fleet.toml` is the DURABLE
+  pin — at every daemon startup, `ApplyFleetConfig` re-pins existing projects'
+  cooldown/model/provider/enabled from `fleet.toml`, overwriting API-side
+  changes made before the restart. API PUTs write SQLite and take effect
+  immediately, but for projects listed in `fleet.toml` they survive only until
+  the next restart. `fleet-cooldown-policy.py` (ops script,
+  `~/.hermes/scripts`) is the ONLY writer of `fleet.toml`: it reads live API
+  (SQLite) state first, applies the pending-based 900s/7200s policy plus the
+  ELEVATED_PINS whitelist, PUTs the normalized cooldowns, then regenerates
+  `fleet.toml` so restarts re-pin to the policy decision. To pin a custom
+  cooldown durably, set it in `fleet.toml` AND whitelist the project in
+  ELEVATED_PINS (SCHED-GAP-012); otherwise the next policy run normalizes it
+  back.
