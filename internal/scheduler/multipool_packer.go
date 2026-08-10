@@ -53,16 +53,24 @@ type MultiPoolPacker struct {
 	allocator       *NamespaceAllocator
 	maxConcurrent   int
 	blackoutWindows []config.BlackoutWindow
+	pendingCounter  *PendingTaskCounter
 }
 
 // NewMultiPoolPacker creates a packer with the given global budget and
-// concurrency cap.
+// concurrency cap. The pending-task counter defaults to the package-level
+// shared instance so existing call sites keep working unchanged.
 func NewMultiPoolPacker(budget, maxConcurrent int, blackoutWindows []config.BlackoutWindow) *MultiPoolPacker {
 	return &MultiPoolPacker{
 		allocator:       NewNamespaceAllocator(budget),
 		maxConcurrent:   maxConcurrent,
 		blackoutWindows: blackoutWindows,
+		pendingCounter:  defaultPendingCounter,
 	}
+}
+
+// SetPendingCounter overrides the pending-task counter (for tests).
+func (m *MultiPoolPacker) SetPendingCounter(c *PendingTaskCounter) {
+	m.pendingCounter = c
 }
 
 // FlatFallback delegates to the existing Packer.Pick for flat single-pool mode.
@@ -125,6 +133,15 @@ func (m *MultiPoolPacker) packFlat(
 			urgency = starvationBoostUrgencyFor(age)
 			log.Printf("FAIRNESS: %s boosted in flat fallback (cooldown=%ds failures=%d window=%v starved=%v)",
 				p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS), age)
+		}
+		// SCHED-GAP-019: a project with pending board tasks gets a urgency
+		// boost below the starvation tier but far above organic urgency,
+		// so freshly-pending work jumps the eligible queue. Cooldown is NOT
+		// bypassed — the boost lives in the scoring loop only.
+		if m.pendingCounter != nil {
+			if pending := m.pendingCounter.CountPending(p.Workdir); pending > 0 && urgency < pendingBoostUrgency {
+				urgency = pendingBoostUrgencyFor(pending)
+			}
 		}
 		list = append(list, scored{proj: *p, urgency: urgency, lastTick: lastTick})
 	}

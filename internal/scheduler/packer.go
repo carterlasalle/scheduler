@@ -33,11 +33,26 @@ type Packer struct {
 	budget          int
 	maxConcurrent   int
 	blackoutWindows []config.BlackoutWindow
+	pendingCounter  *PendingTaskCounter
 }
 
-// NewPacker creates a packer with the given budget and concurrency cap.
+// NewPacker creates a packer with the given budget and concurrency cap. The
+// pending-task counter defaults to the package-level shared instance so
+// existing call sites keep working unchanged.
 func NewPacker(db *sql.DB, calc *UrgencyCalculator, budget, maxConcurrent int, blackoutWindows []config.BlackoutWindow) *Packer {
-	return &Packer{db: db, calculator: calc, budget: budget, maxConcurrent: maxConcurrent, blackoutWindows: blackoutWindows}
+	return &Packer{
+		db:              db,
+		calculator:      calc,
+		budget:          budget,
+		maxConcurrent:   maxConcurrent,
+		blackoutWindows: blackoutWindows,
+		pendingCounter:  defaultPendingCounter,
+	}
+}
+
+// SetPendingCounter overrides the pending-task counter (for tests).
+func (p *Packer) SetPendingCounter(c *PendingTaskCounter) {
+	p.pendingCounter = c
 }
 
 // scored is a project with its computed urgency.
@@ -110,6 +125,14 @@ func (p *Packer) Pick(now time.Time, spawnerRunning map[string]bool) ([]PackedPr
 			s.urgency = starvationBoostUrgencyFor(age)
 			log.Printf("FAIRNESS: %s boosted in flat packer (cooldown=%ds failures=%d window=%v starved=%v)",
 				s.name, s.cooldownS, s.consecutiveFailures, StarvationWindow(s.cooldownS), age)
+		}
+		// SCHED-GAP-019: board-aware pending-task boost — same tier as the
+		// namespace and flat-fallback paths, so all three selection paths
+		// stay in sync. Cooldown is NOT bypassed.
+		if p.pendingCounter != nil {
+			if pending := p.pendingCounter.CountPending(s.workdir); pending > 0 && s.urgency < pendingBoostUrgency {
+				s.urgency = pendingBoostUrgencyFor(pending)
+			}
 		}
 		s.lastTickAt = lastCompleted
 		list = append(list, s)

@@ -114,6 +114,16 @@ func (m *MultiPoolPacker) Pack(
 				log.Printf("FAIRNESS: %s boosted (cooldown=%ds failures=%d window=%v starved=%v) — starvation guarantee",
 					p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS), age)
 			}
+			// SCHED-GAP-019: a project with pending board tasks gets a
+			// urgency boost below the starvation tier but far above organic
+			// urgency, so freshly-pending work jumps the eligible queue.
+			// Cooldown is NOT bypassed — the boost lives in the scoring loop
+			// only; the cooldown checks below remain the sole gate.
+			if m.pendingCounter != nil {
+				if pending := m.pendingCounter.CountPending(p.Workdir); pending > 0 && urgency < pendingBoostUrgency {
+					urgency = pendingBoostUrgencyFor(pending)
+				}
+			}
 
 			effW := CalcEffectiveWeight(p.Weight, totalWeightInNS, alloc)
 			scored = append(scored, ProjectUrgency{
