@@ -46,7 +46,7 @@ func TestSlotPool_ConcurrentAcquireStress(t *testing.T) {
 			}
 			mu.Unlock()
 			time.Sleep(10 * time.Millisecond)
-			pool.Release()
+			pool.Release(fmt.Sprintf("worker-%d", id))
 		}(i)
 	}
 
@@ -77,8 +77,8 @@ func TestSlotPool_DebounceCoalescing(t *testing.T) {
 	ch := pool.SlotFreed()
 	drainCh(ch, 50*time.Millisecond)
 
-	for range 5 {
-		pool.Release()
+	for _, n := range []string{"a", "b", "c", "d", "e"} {
+		pool.Release(n)
 	}
 
 	events := 0
