@@ -227,6 +227,32 @@ Higher urgency projects get picked first.
 
 Default 900s between successive ticks for the same project.
 
+### Cooldown Policy (fleet-cooldown-policy.py)
+
+Fleet-wide cooldown normalization is governed by the ops script
+`~/.hermes/scripts/fleet-cooldown-policy.py` (not part of this repo — it lives
+in the Hermes ops home; run `python3 ~/.hermes/scripts/fleet-cooldown-policy.py`
+for a dry run, `--apply` to write). The script:
+
+- Reads the live SQLite state first (`GET /api/v1/projects` equivalent), then
+  regenerates `~/.hermes/fleet.toml` so every `[[projects]]` entry's
+  `cooldown_s` matches the daemon's current value, and optionally PUTs
+  normalized cooldowns back to the API.
+- Honors the `ELEVATED_PINS` whitelist (e.g. `h3=21600`, `warpfs=43200`):
+  projects with an operator-set pin are never written below their canonical
+  cooldown (SCHED-GAP-012), no matter what the SQLite state says.
+- Is the **only** writer of `fleet.toml`. `fleet.toml` pins are durable across
+  daemon restarts (loader re-pins existing projects at every startup), while
+  an API `PUT /api/v1/projects/{name}` cooldown change is durable only within
+  the daemon session — the next policy run normalizes it back unless the
+  project has an ELEVATED_PINS entry.
+
+**Override procedure:** to pin a project's cooldown permanently, add it to
+`ELEVATED_PINS` in `~/.hermes/scripts/fleet-cooldown-policy.py` (and set the
+pin in `fleet.toml`), then run the script with `--apply`. The pin survives
+policy runs and daemon restarts. See `docs/integration.md` for the full
+authority model.
+
 ---
 
 ## Configuration
@@ -270,6 +296,10 @@ Default 900s between successive ticks for the same project.
 | `-sim-setup` | `false` | Create test fixture with 14 dry-run projects |
 | `-sim-ticks` | `10` | Number of evaluation ticks to run in sim-setup mode |
 | `-config` | (none) | Path to TOML fleet config file |
+| `-failure-window` | `100` | Number of recent ticks per project for `/api/v1/status` per-project failure-rate breakdown |
+| `-auto-disable-failure-rate` | `0` | Per-project failure-rate threshold (0.0–1.0) for auto-disable; `0` = off |
+| `-auto-disable-window` | `100` | Ticks per project over which auto-disable failure rate is computed |
+| `-auto-disable-min-ticks` | `50` | Minimum ticks in window before auto-disable can fire |
 | `-log-file` | `~/.hermes/coding-hermes/scheduler.log` | Path to append structured tick logs (JSON lines); empty disables |
 | `-show-config` | `false` | Print resolved config (CLI + env) as TOML and exit |
 | `-schema` | `false` | Output JSON Schema for schedulerd.toml and exit |
