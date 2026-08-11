@@ -85,6 +85,8 @@ func (lt *LifecycleTracker) StartRunning(tickID string) error {
 }
 
 // Complete writes the final outcome of a tick to the database.
+// SCHED-GAP-029: also persists commits/files_changed (previously only
+// tokens_in/tokens_out/cost_usd were written, leaving commits/files zero).
 func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	var exitCode interface{}
 	if outcome.ExitCode >= 0 {
@@ -92,11 +94,13 @@ func (lt *LifecycleTracker) Complete(outcome TickOutcome) error {
 	}
 	_, err := lt.db.Exec(`
 		UPDATE ticks SET status = ?, outcome = ?, completed_at = ?, exit_code = ?, error = ?, session_id = ?,
-			tokens_in = ?, tokens_out = ?, cost_usd = ?
+			tokens_in = ?, tokens_out = ?, cost_usd = ?,
+			commits = ?, files_changed = ?
 		WHERE id = ?
 	`, string(outcome.Status), outcome.Status.Outcome(), outcome.Finished.Format(time.RFC3339), exitCode,
 		stringOrNil(outcome.Error), stringOrNil(outcome.SessionID),
 		outcome.TokensIn, outcome.TokensOut, outcome.CostUSD,
+		outcome.Commits, outcome.FilesChanged,
 		outcome.TickID)
 	if err != nil {
 		return fmt.Errorf("complete tick %s: %w", outcome.TickID, err)

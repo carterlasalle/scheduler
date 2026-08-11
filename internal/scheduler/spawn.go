@@ -259,6 +259,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 		// Try HTTP gateway spawn first (zero process overhead).
 		if s.gateway != nil {
+			reqStart := time.Now() // SCHED-GAP-029: capture before SendResponse for git window
+
 			ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 
 			// S-GAP-003: the gateway call below is synchronous and blocks for
@@ -310,12 +312,17 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 					TickID:     tickID,
 					Project:    project.Name,
 					SessionID:  sessionID,
-					Started:    now,
+					Started:    reqStart, // SCHED-GAP-029: use request start, not completion
 					Deliver:    project.Deliver,
 					Output:     *bytes.NewBufferString(text),
 					spawner:    s,
 					completed:  true,
 					completeAt: now,
+					// SCHED-GAP-029: carry real usage + context for outcome metrics.
+					usage:    resp.Usage,
+					model:    model,
+					workdir:  project.Workdir,
+					reqStart: reqStart,
 				}, nil
 			}
 			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
@@ -385,6 +392,8 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 		stdout:  stdout,
 		stderr:  stderr,
 		spawner: s,
+		// SCHED-GAP-029: carry workdir for potential future metric enrichment.
+		workdir: project.Workdir,
 	}
 	// S-GAP-003: keep the tick row's heartbeat fresh for the life of the
 	// process; Wait() stops the goroutine. The gateway branch above runs the
@@ -481,6 +490,12 @@ type SpawnedTick struct {
 	// completed is true for gateway-spawned ticks that finished in Spawn().
 	completed  bool
 	completeAt time.Time
+
+	// SCHED-GAP-029: real usage + context for outcome metrics.
+	usage    Usage     // gateway response token usage (gateway path only)
+	model    string    // model used for this tick (for cost lookup)
+	workdir  string    // project workdir for git commit/file counting
+	reqStart time.Time // request start time (before SendResponse) for git window
 }
 
 // Wait blocks until the process exits and returns the outcome.
@@ -500,15 +515,30 @@ func (st *SpawnedTick) Wait() TickOutcome {
 	}()
 
 	// Gateway-spawned ticks are already complete — return immediately.
+	// SCHED-GAP-029: populate real tokens/cost/commits/files from gateway
+	// usage + git. Previously every gateway tick returned zero metrics.
 	if st.completed {
+		tokensIn := st.usage.InputTokens
+		tokensOut := st.usage.OutputTokens
+		cost := computeCostUSD(st.model, tokensIn, tokensOut)
+		commits, files := countGitChanges(st.workdir, st.reqStart, st.completeAt)
+		log.Printf("TICK: %s %s → %s (%v) %s",
+			st.Project, st.TickID, TickCompleted,
+			st.completeAt.Sub(st.Started).Round(time.Second),
+			formatCostSummary(st.model, tokensIn, tokensOut, cost, commits, files))
 		return TickOutcome{
-			TickID:    st.TickID,
-			Project:   st.Project,
-			SessionID: st.SessionID,
-			Started:   st.Started,
-			Finished:  st.completeAt,
-			Status:    TickCompleted,
-			Duration:  st.completeAt.Sub(st.Started),
+			TickID:       st.TickID,
+			Project:      st.Project,
+			SessionID:    st.SessionID,
+			Started:      st.Started,
+			Finished:     st.completeAt,
+			Status:       TickCompleted,
+			Duration:     st.completeAt.Sub(st.Started),
+			TokensIn:     tokensIn,
+			TokensOut:    tokensOut,
+			CostUSD:      cost,
+			Commits:      commits,
+			FilesChanged: files,
 		}
 	}
 
