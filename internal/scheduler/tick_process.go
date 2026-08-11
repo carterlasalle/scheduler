@@ -66,6 +66,18 @@ func (l *Loop) evaluate() {
 		if l.slotPool != nil {
 			runningSet = l.slotPool.RunningSet()
 		}
+		// SCHED-GAP-030: after a daemon restart, in-flight gateway ticks
+		// (pid=0 rows left 'running' by cleanDanglingOnStartup) are NOT in
+		// the in-memory slot pool, so a fresh daemon's first EVAL would
+		// double-spawn every project with an in-flight tick (INFRA-012
+		// regression, observed 2026-08-11 restart). Merge the DB running
+		// set — the slot pool stays authoritative for in-process spawns
+		// (no SQLite race), the DB set adds survivors from before restart.
+		if dbRunning, _ := l.evalContext(context.Background()); len(dbRunning) > 0 {
+			for _, name := range dbRunning {
+				runningSet[name] = true
+			}
+		}
 		packed, err = l.packer.Pick(now, runningSet)
 		if err != nil {
 			log.Printf("EVAL: packer error: %v", err)

@@ -266,3 +266,47 @@ func TestReapZombies_PidZeroUntouched(t *testing.T) {
 		t.Errorf("pid=0 gateway tick status = %q, want running (reaper only targets pid > 0)", got)
 	}
 }
+
+// TestEvalFallback_NoDuplicateRespawnAfterRestart — SCHED-GAP-030 regression
+// (2026-08-11). Production topology: fleet.toml carries 0 namespaces, so
+// evaluate() takes the FALLBACK packer path (packer.go) whose running set
+// comes from the in-memory slot pool — EMPTY right after a daemon restart.
+// cleanDanglingOnStartup leaves fresh pid=0 gateway ticks 'running', but
+// without this fix the first EVAL re-picks the project and spawns a
+// duplicate tick (observed live: daemon restart spawned
+// coding-hermes-scheduler-2026-08-11-03-00-52 while the 02-58-39 tick was
+// still executing). The DB running set must be merged into the fallback
+// packer's running set.
+func TestEvalFallback_NoDuplicateRespawnAfterRestart(t *testing.T) {
+	db := newTestDB(t)
+	mustCreateProjectINFRA012(t, db, "p1")
+	// p1 has an in-flight gateway tick (pid=0) surviving the restart.
+	insertRunningTick(t, db, "p1-inflight", "p1", 0)
+
+	loop := NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
+	loop.ForceEvaluate()
+
+	// evaluate() must NOT spawn a second tick for p1. Poll briefly for the
+	// goroutine to finish, then assert exactly one row remains.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE project_name = 'p1'`).Scan(&n); err != nil {
+			t.Fatalf("count p1 ticks: %v", err)
+		}
+		if n == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ticks WHERE project_name = 'p1'`).Scan(&n); err != nil {
+		t.Fatalf("count p1 ticks: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("p1 tick rows = %d, want 1 — fallback packer double-spawned an in-flight project after restart", n)
+	}
+	if got := tickStatusOf(t, db, "p1-inflight"); got != "running" {
+		t.Errorf("p1-inflight status = %q, want running", got)
+	}
+}
