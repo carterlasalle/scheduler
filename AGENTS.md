@@ -70,6 +70,10 @@ All flags (defaults match `cmd/schedulerd/main.go` — the canonical source):
 | `--log-file` | `~/.hermes/coding-hermes/scheduler.log` | Path to append structured tick logs (JSON lines); empty disables |
 | `--show-config` | `false` | Print resolved config (CLI + env) as TOML and exit |
 | `--schema` | `false` | Output JSON Schema for schedulerd.toml and exit |
+| `--failure-window` | `100` | Number of recent ticks per project for `/api/v1/status` per-project failure-rate breakdown (SCHED-GAP-018) |
+| `--auto-disable-failure-rate` | `0` | Per-project failure-rate threshold (0.0–1.0) for auto-disable; `0` = off (SCHED-GAP-018) |
+| `--auto-disable-window` | `100` | Ticks per project over which auto-disable failure rate is computed (SCHED-GAP-018) |
+| `--auto-disable-min-ticks` | `50` | Minimum ticks in window before auto-disable can fire (SCHED-GAP-018) |
 
 ## Architecture
 
