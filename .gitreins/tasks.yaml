@@ -890,3 +890,20 @@ tasks:
   status: complete
   created_at: '2026-08-10T04:10:58.207015+00:00'
   completed_at: '2026-08-10T04:11:06.744328+00:00'
+- id: SCHED-GAP-029
+  title: Tick outcome metrics (tokens, cost, commits, files) populated from gateway
+    usage + git at lifecycle completion
+  criteria:
+  - 'Gateway-spawned ticks persist real tokens: TickOutcome.TokensIn/TokensOut come
+    from the gateway Usage struct, not zeros'
+  - Complete() persists commits and files_changed columns along with tokens_in/tokens_out/cost_usd
+  - CostUSD computed from per-model rate table (known model) or non-zero fallback
+    (unknown model)
+  - Commits/files counted via git rev-list/diff over the tick window in the project
+    workdir; return 0 on any git error
+  - go build ./... go vet ./... go test -short -p 1 ./... golangci-lint run all pass
+  - API JSON shapes unchanged (ticks endpoint still snake_case; conformance tests
+    green)
+  status: complete
+  created_at: '2026-08-11T08:23:35.456658+00:00'
+  completed_at: '2026-08-11T08:23:39.986796+00:00'
