@@ -57,7 +57,7 @@ enabled = true
 # namespace or the namespace weight scheduler skips it entirely.
 [[projects]]
 name = "helios"
-repo_url = "https://github.com/coding-hermes/helios.git"
+repo_url = "https://github.com/dexdat/Helios.git"
 workdir = "/home/kara/helios-work"
 weight = 10
 priority = 8
