@@ -907,3 +907,34 @@ tasks:
   status: complete
   created_at: '2026-08-11T08:23:35.456658+00:00'
   completed_at: '2026-08-11T08:23:39.986796+00:00'
+- id: SCHED-GAP-033
+  title: JSON Schema cooldown_s default aligns with loader (7200)
+  criteria:
+  - --schema output projects.items.properties.cooldown_s.default == 7200 (matches
+    defaultProjectCooldown applied by projectFromDef)
+  - cmd/schedulerd/show_config.go schema default 900 -> 7200
+  - stale default comment in internal/config/config.go:174 updated to 7200
+  - test asserts schema cooldown_s default 7200
+  - go build ./... go vet ./... gofmt clean, go test -count=1 -short -p 1 ./... 9/9
+    packages PASS, golangci-lint 0 issues, gitreins guard PASS
+  - commit 0ed3f5a path-limited to cmd/schedulerd/show_config.go, cmd/schedulerd/show_config_test.go,
+    internal/config/config.go and carries the Co-authored-by trailer
+  status: complete
+  created_at: '2026-08-12T09:52:08.455409+00:00'
+  completed_at: '2026-08-12T09:52:11.857919+00:00'
+- id: SCHED-GAP-034
+  title: GET /api/v1/config returns resolved three-layer config
+  criteria:
+  - curl http://127.0.0.1:9090/api/v1/config returns 200 JSON with min_interval, max_concurrent,
+    gateway.url, auto_disable_failure_rate
+  - endpoint registered in api Handler() mux; GET only, non-GET returns 405
+  - gateway key masked (never plaintext in response)
+  - OpenAPI spec (server_helpers.go) + docs/integration.md route table updated
+  - 'tests: TestAPI_Config_Success + TestAPI_Config_MethodNotAllowed'
+  - go build ./... go vet ./... gofmt clean, go test -count=1 -short -p 1 ./... 9/9
+    packages PASS, golangci-lint 0 issues, gitreins guard PASS
+  - commit edf845f path-limited to cmd/schedulerd/main.go, internal/api/*, docs/integration.md,
+    specs/S06-rest-api.md and carries the Co-authored-by trailer
+  status: complete
+  created_at: '2026-08-12T09:52:08.563646+00:00'
+  completed_at: '2026-08-12T09:53:09.225328+00:00'
