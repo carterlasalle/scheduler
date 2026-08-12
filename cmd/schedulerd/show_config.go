@@ -67,7 +67,7 @@ func printSchema() {
           "workdir": { "type": "string" },
           "weight": { "type": "integer", "default": 10 },
           "priority": { "type": "integer", "default": 5 },
-          "cooldown_s": { "type": "integer", "default": 900 },
+          "cooldown_s": { "type": "integer", "default": 7200 },
           "decay_rate": { "type": "number", "default": 1.0 },
           "model": { "type": "string", "default": %q },
           "provider": { "type": "string", "default": %q },

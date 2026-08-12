@@ -171,7 +171,7 @@ type ProjectDef struct {
 	Workdir     string  `toml:"workdir"`
 	Weight      int     `toml:"weight"`      // default 10 if <= 0
 	Priority    int     `toml:"priority"`    // default 5 if <= 0
-	CooldownS   int     `toml:"cooldown_s"`  // default 900 if <= 0
+	CooldownS   int     `toml:"cooldown_s"`  // default 7200 if <= 0 (2h baseline, 3-speed policy)
 	DecayRate   float64 `toml:"decay_rate"`  // default 1.0 if <= 0
 	Model       string  `toml:"model"`       // default DefaultModel
 	Provider    string  `toml:"provider"`    // default DefaultProvider

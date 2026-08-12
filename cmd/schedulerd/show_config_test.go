@@ -49,6 +49,17 @@ func TestPrintSchema(t *testing.T) {
 	} else if noExec["default"] != true {
 		t.Errorf("no_exec_fallback default = %v, want true (main.go flag default)", noExec["default"])
 	}
+
+	// Project cooldown default must match what projectFromDef() applies in
+	// internal/config/loader.go (SCHED-GAP-033): 7200 (2h baseline, 3-speed
+	// policy), NOT the legacy hot default of 900.
+	projProps := props["projects"].(map[string]interface{})["items"].(map[string]interface{})["properties"].(map[string]interface{})
+	cooldown, ok := projProps["cooldown_s"].(map[string]interface{})
+	if !ok {
+		t.Error("projects.items section missing cooldown_s property")
+	} else if cooldown["default"] != float64(7200) {
+		t.Errorf("cooldown_s default = %v, want 7200 (loader defaultProjectCooldown)", cooldown["default"])
+	}
 }
 
 func TestPrintConfig(t *testing.T) {
