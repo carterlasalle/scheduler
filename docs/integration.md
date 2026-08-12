@@ -16,6 +16,7 @@ It listens on `127.0.0.1:9090` (loopback only) and persists state in
 | Base URL | `http://127.0.0.1:9090` |
 | API root | `/api/v1` |
 | OpenAPI | `/api/v1/openapi.json` |
+| Resolved config | `GET /api/v1/config` (three-layer snapshot TOML < env < CLI; gateway key masked) |
 | MCP (JSON-RPC) | `POST /mcp` |
 | HTML dashboard | `/dashboard/partial` (also `/` and `/health`) |
 | Wire format | **snake_case** emission (`cooldown_s`, `repo_url`, `created_at`) |

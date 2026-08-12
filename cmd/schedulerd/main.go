@@ -269,6 +269,36 @@ func main() {
 	duckbrain := sync.NewDuckBrainSync(db, *duckbrainNS, *duckbrainURL)
 	apiServer := api.NewServer(db, loop)
 	apiServer.SetFailureWindow(*failureWindow)
+	// SCHED-GAP-034: snapshot the ACTIVE three-layer config (TOML < env <
+	// CLI) for GET /api/v1/config. By this point the flag vars carry the
+	// resolved values — TOML overrides were applied above where flags sat
+	// at their defaults, and SCHEDULER_* env overrides were applied earlier.
+	// The gateway key is masked by SetResolvedConfig; it never reaches the wire.
+	apiServer.SetResolvedConfig(api.ResolvedConfig{
+		DBPath:                 *dbPath,
+		Listen:                 *listen,
+		MinInterval:            minInterval.String(),
+		MaxInterval:            maxInterval.String(),
+		NumLevels:              *numLevels,
+		WeightBudget:           *weightBudget,
+		MaxConcurrent:          *maxConcurrent,
+		TickTimeout:            tickTimeout.String(),
+		NamespaceMode:          *namespaceMode,
+		AutoDisableFailureRate: *autoDisableRate,
+		AutoDisableWindow:      *autoDisableWindow,
+		AutoDisableMinTicks:    *autoDisableMinTicks,
+		FailureWindow:          *failureWindow,
+		Gateway: api.GatewayConfigSnapshot{
+			URL:            *gatewayURL,
+			Key:            *gatewayKey,
+			ForemanHome:    *foremanHome,
+			NoExecFallback: *noExecFallback,
+		},
+		DuckBrain: api.DuckBrainConfigSnapshot{
+			Namespace: *duckbrainNS,
+			URL:       *duckbrainURL,
+		},
+	})
 	apiServer.SetDuckBrainHealth(func() map[string]interface{} {
 		h := duckbrain.Health()
 		return map[string]interface{}{

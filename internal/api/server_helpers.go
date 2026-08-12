@@ -313,6 +313,14 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/config": {
+      "get": {
+        "summary": "Resolved daemon configuration snapshot (three-layer: TOML < env vars < CLI flags)",
+        "responses": {
+          "200": {"description": "Active config — min_interval, max_concurrent, gateway.url, auto_disable_failure_rate, etc. The gateway key is masked (SCHED-GAP-034)."}
+        }
+      }
+    },
     "/api/v1/projects": {
       "get": {
         "summary": "List all projects",

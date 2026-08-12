@@ -776,6 +776,86 @@ func TestAPI_Queue_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+// --- config ---
+
+func TestAPI_Config_Success(t *testing.T) {
+	a := newAPITestServer(t)
+	a.server.SetResolvedConfig(api.ResolvedConfig{
+		DBPath:                 "/tmp/sched.db",
+		Listen:                 "127.0.0.1:9090",
+		MinInterval:            "30s",
+		MaxInterval:            "24h",
+		NumLevels:              10,
+		WeightBudget:           100,
+		MaxConcurrent:          2,
+		TickTimeout:            "2h",
+		NamespaceMode:          true,
+		AutoDisableFailureRate: 0.5,
+		AutoDisableWindow:      100,
+		AutoDisableMinTicks:    50,
+		FailureWindow:          100,
+		Gateway: api.GatewayConfigSnapshot{
+			URL:            "http://127.0.0.1:8642",
+			Key:            "supersecretkey",
+			ForemanHome:    "/tmp/foreman",
+			NoExecFallback: true,
+		},
+		DuckBrain: api.DuckBrainConfigSnapshot{
+			Namespace: "coding-hermes",
+			URL:       "http://localhost:3000",
+		},
+	})
+	status, body := a.do(t, "GET", "/api/v1/config", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if body["min_interval"] != "30s" {
+		t.Errorf("min_interval = %v, want \"30s\"", body["min_interval"])
+	}
+	if body["max_concurrent"] != float64(2) {
+		t.Errorf("max_concurrent = %v, want 2", body["max_concurrent"])
+	}
+	if body["auto_disable_failure_rate"] != 0.5 {
+		t.Errorf("auto_disable_failure_rate = %v, want 0.5", body["auto_disable_failure_rate"])
+	}
+	if body["db_path"] != "/tmp/sched.db" {
+		t.Errorf("db_path = %v, want \"/tmp/sched.db\"", body["db_path"])
+	}
+	if body["namespace_mode"] != true {
+		t.Errorf("namespace_mode = %v, want true", body["namespace_mode"])
+	}
+	gw, ok := body["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response missing gateway object")
+	}
+	if gw["url"] != "http://127.0.0.1:8642" {
+		t.Errorf("gateway.url = %v, want \"http://127.0.0.1:8642\"", gw["url"])
+	}
+	if gw["key"] != "supe****" {
+		t.Errorf("gateway.key = %v, want masked \"supe****\" (plaintext must never leak)", gw["key"])
+	}
+	if gw["no_exec_fallback"] != true {
+		t.Errorf("gateway.no_exec_fallback = %v, want true", gw["no_exec_fallback"])
+	}
+	duck, ok := body["duckbrain"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response missing duckbrain object")
+	}
+	if duck["namespace"] != "coding-hermes" {
+		t.Errorf("duckbrain.namespace = %v, want \"coding-hermes\"", duck["namespace"])
+	}
+}
+
+func TestAPI_Config_MethodNotAllowed(t *testing.T) {
+	a := newAPITestServer(t)
+	for _, method := range []string{"POST", "PUT", "DELETE"} {
+		status, _ := a.do(t, method, "/api/v1/config", nil)
+		if status != http.StatusMethodNotAllowed {
+			t.Errorf("%s /api/v1/config status = %d, want 405", method, status)
+		}
+	}
+}
+
 // --- openapi ---
 
 func TestAPI_OpenAPI_Success(t *testing.T) {

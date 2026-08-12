@@ -25,6 +25,11 @@ type Server struct {
 	// in /api/v1/status. Kept as a func so the API package doesn't import
 	// the sync package (no dependency cycle; nil = feature off).
 	duckbrainHealth func() map[string]interface{}
+
+	// resolvedConfig is the startup-time snapshot of the active
+	// three-layer config served by GET /api/v1/config (SCHED-GAP-034).
+	// Populated by main.go via SetResolvedConfig after TOML/env resolution.
+	resolvedConfig ResolvedConfig
 }
 
 // NewServer creates an API server.
@@ -56,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.health)
 	mux.HandleFunc("/api/v1/status", s.status)
+	mux.HandleFunc("/api/v1/config", s.config)
 	mux.HandleFunc("/api/v1/projects", s.handleProjects)
 	mux.HandleFunc("/api/v1/projects/", s.handleProjectByID)
 	mux.HandleFunc("/api/v1/namespaces", s.handleNamespaces)
