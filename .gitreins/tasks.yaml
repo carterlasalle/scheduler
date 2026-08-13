@@ -1014,3 +1014,44 @@ tasks:
   status: complete
   created_at: '2026-08-13T19:41:09.728371+00:00'
   completed_at: '2026-08-13T19:41:43.384373+00:00'
+- id: GAP-043
+  title: 'Zero-select eval monitoring: EVAL-ZERO-SELECT log + HIGH event'
+  criteria:
+  - 'CRITERIA: (1) internal/scheduler/loop.go carries zeroSelectCount/lastZeroSelectEvent
+    fields; (2) evaluate() in tick_process.go calls noteZeroSelect on zero picks and
+    resetZeroSelect on selection; (3) 2 consecutive zero-selects with eligible projects
+    (enabled, not running, cooldown elapsed) log EVAL-ZERO-SELECT and emit HIGH loop
+    event, re-emitted max once per 30 min; (4) /api/v1/status returns zero_select_consecutive,
+    zero_select_eligible, zero_select_last_at; (5) tests cover: no-eligible reset,
+    threshold emit, reset-on-select, re-emit throttle, eligible filtering (running/cooldown/disabled
+    excluded), stats exposure; (6) go build, go vet, gofmt clean, full test suite
+    green'
+  status: complete
+  created_at: '2026-08-13T22:21:21.950330+00:00'
+  completed_at: '2026-08-13T22:21:26.694502+00:00'
+- id: GAP-044
+  title: 'Disable provenance: disabled_at/by/reason on every disable path'
+  criteria:
+  - 'CRITERIA: (1) migration v12 adds disabled_at/disabled_by/disabled_reason to projects;
+    (2) every disable path stamps them: API pause=api-pause, PUT enabled=false=api,
+    DELETE confirm=true=api-delete with COALESCE legacy backfill, auto-disable=auto-disable
+    with failure stats; (3) resume (enabled=true) clears all three; (4) API paths
+    log matching events-table entries; (5) fields exposed in /api/v1/projects and
+    dashboard (fleet_table + project_detail); (6) tests: disable stamps defaults,
+    explicit provenance honored, resume clears, non-enabled update untouched, delete
+    stamps legacy + keeps existing, JSON exposes fields, migration adds columns, auto-disable
+    provenance; (7) go build, vet, gofmt, full suite green'
+  status: complete
+  created_at: '2026-08-13T22:21:22.236662+00:00'
+  completed_at: '2026-08-13T22:22:34.306250+00:00'
+- id: GAP-039-reopen
+  title: "Reopened GAP-039: outer pointer Pending section drift \u2014 verification\
+    \ failed 2026-08-13 21:2xZ"
+  criteria:
+  - 'CRITERIA: (1) outer pointer /home/kara/coding-hermes-scheduler/.coding-hermes/tasks.md
+    no longer carries a hand-maintained Pending list: grep -c ''^- GAP-'' on the file
+    == 0; (2) pointer still names the canonical board path coding-herms-scheduler/.coding-hermes/board/tasks.jsonl;
+    (3) double-nesting documented in the pointer; (4) refresh date stamp present'
+  status: complete
+  created_at: '2026-08-13T22:22:48.745195+00:00'
+  completed_at: '2026-08-13T22:23:58.684487+00:00'
