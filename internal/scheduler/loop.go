@@ -77,7 +77,7 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 	if len(namespaceMode) > 0 {
 		nsMode = namespaceMode[0]
 	}
-	return &Loop{
+	l := &Loop{
 		calculator:      calc,
 		packer:          NewPacker(db, calc, budget, maxConcur, nil),
 		multiPoolPacker: NewMultiPoolPacker(budget, maxConcur, nil),
@@ -94,6 +94,10 @@ func NewLoop(db *sql.DB, minI, maxI time.Duration, numLevels, budget, maxConcur 
 		evalCh:          make(chan struct{}, 1),
 		stopCh:          make(chan struct{}),
 	}
+	// GAP-035: terminal gateway-key rejections in Spawn() emit HIGH events
+	// through the loop's event logger.
+	l.spawner.SetEventLogger(l.events)
+	return l
 }
 
 // SetNamespaceMode enables or disables multi-namespace scheduling.

@@ -49,6 +49,12 @@ type Spawner struct {
 	gateway        *GatewayClient // HTTP API client (nil = use exec.Command)
 	noExecFallback bool           // disable exec.Command fallback on gateway failure
 
+	// events is an optional EventLogger. When set, terminal gateway-key
+	// rejections (GAP-035) emit a HIGH event so a key regression is
+	// immediately visible instead of producing thousands of silent failed
+	// ticks. Nil is safe — tests and tooling construct Spawners standalone.
+	events *EventLogger
+
 	// heartbeatInterval is the cadence at which a running tick's row gets its
 	// heartbeat_at refreshed (S-GAP-003). The gateway zombie reaper treats a
 	// pid=0 row whose heartbeat is stale as orphaned. Tests shrink this.
@@ -97,6 +103,27 @@ func (s *Spawner) noteSpawnFailure(project string) {
 	}
 }
 
+// gatewayKeyRejected is the terminal classification path for GAP-035: a
+// gateway 401/403 on either the pre-dispatch probe or SendResponse. It
+// (1) logs a distinct GATEWAY KEY REJECTED line, (2) bumps the selection
+// backoff so the broken project is not re-picked into a retry flood, and
+// (3) emits an immediate HIGH event so a key regression is visible in the
+// events table/dashboard instead of vanishing into thousands of generic
+// failed ticks. The returned error wraps ErrGatewayKeyRejected so callers
+// can classify it with errors.Is.
+func (s *Spawner) gatewayKeyRejected(project, tickID string, err error) error {
+	log.Printf("GATEWAY KEY REJECTED: %s tick=%s error=%v — failing fast, no dispatch, no exec fallback", project, tickID, err)
+	s.noteSpawnFailure(project)
+	if s.events != nil {
+		s.events.Emit(context.Background(), SeverityHigh, "spawn", "gateway key rejected", map[string]any{
+			"project": project,
+			"tick_id": tickID,
+			"error":   err.Error(),
+		})
+	}
+	return fmt.Errorf("gateway key rejected for %s: %w", project, err)
+}
+
 // SetForemanHome overrides the default HERMES_HOME for foreman sessions.
 func (s *Spawner) SetForemanHome(path string) {
 	s.foremanHome = path
@@ -129,6 +156,17 @@ func (s *Spawner) SetGatewayClient(client *GatewayClient) {
 func (s *Spawner) SetNoExecFallback(v bool) {
 	s.noExecFallback = v
 }
+
+// SetEventLogger wires an optional EventLogger for HIGH events on terminal
+// gateway-key rejections (GAP-035). Nil (the default) disables emission.
+func (s *Spawner) SetEventLogger(el *EventLogger) {
+	s.events = el
+}
+
+// gatewayKeyProbeTimeout bounds the pre-dispatch per-project key validation
+// (GAP-035). The probe is a cheap GET /health — it must never add meaningful
+// latency to a spawn, and a slow probe must not stall the tick.
+const gatewayKeyProbeTimeout = 5 * time.Second
 
 // GatewayAvailable returns true if the gateway client is configured and reachable.
 func (s *Spawner) GatewayAvailable() bool {
@@ -263,6 +301,27 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 			ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 
+			// GAP-035: validate a per-project gateway key BEFORE dispatch.
+			// The 2026-08-04 outage had the fleet send revoked fk-* keys
+			// blindly — every spawn burned a full gateway cycle, failed, and
+			// retried next eval: 8208+ silent failures. A cheap authenticated
+			// probe turns that into a fail-fast terminal error with a HIGH
+			// event. Non-auth probe errors (network blip, slow gateway) are
+			// non-terminal: dispatch proceeds and the SendResponse 401
+			// classification backstops.
+			if project.GatewayKey != "" {
+				vctx, vcancel := context.WithTimeout(ctx, gatewayKeyProbeTimeout)
+				verr := s.gateway.ValidateKey(vctx, project.GatewayKey)
+				vcancel()
+				if errors.Is(verr, ErrGatewayKeyRejected) {
+					cancel()
+					return nil, s.gatewayKeyRejected(project.Name, tickID, verr)
+				}
+				if verr != nil {
+					log.Printf("GATEWAY KEY PROBE: %s tick=%s error=%v — proceeding to dispatch", project.Name, tickID, verr)
+				}
+			}
+
 			// S-GAP-003: the gateway call below is synchronous and blocks for
 			// the whole tick (up to --tick-timeout). Persist a placeholder
 			// session id + first heartbeat BEFORE it starts, so the tick row
@@ -326,6 +385,14 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 				}, nil
 			}
 			log.Printf("GATEWAY FAIL: %s tick=%s error=%v — falling back to exec.Command", project.Name, tickID, gwErr)
+			// GAP-035: an AUTH rejection is terminal. Falling back to exec
+			// would silently mask a key regression and keep flooding the
+			// fleet with disguised failures — fail fast with a classified
+			// error + HIGH event instead, regardless of the no-exec-fallback
+			// flag (which only governs transient gateway errors).
+			if errors.Is(gwErr, ErrGatewayKeyRejected) {
+				return nil, s.gatewayKeyRejected(project.Name, tickID, gwErr)
+			}
 			if s.noExecFallback {
 				log.Printf("SKIPPED: %s tick=%s exec fallback disabled, dropping tick", project.Name, tickID)
 				s.noteSpawnFailure(project.Name)
