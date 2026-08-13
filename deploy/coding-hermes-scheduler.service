@@ -18,7 +18,8 @@ ExecStart=%h/coding-hermes-scheduler/bin/schedulerd \
   --min-interval 30s \
   --tick-timeout 7200s \
   --gateway-url=http://127.0.0.1:8642 \
-  --gateway-key ${API_SERVER_KEY}
+  --no-exec-fallback \
+  --auto-disable-failure-rate 0.9
 Restart=on-failure
 RestartSec=30
 MemoryMax=8G
@@ -26,7 +27,9 @@ StandardOutput=journal
 StandardError=journal
 Environment=HOME=%h
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-# Load the gateway API key from a root-owned env file (chmod 600):
+# Gateway key comes ONLY from the 0600 env file below (API_SERVER_KEY) —
+# never pass --gateway-key on the command line (ps-readable by any local user).
+# main.go defaults --gateway-key to $API_SERVER_KEY, so no flag is needed.
 #   /etc/coding-hermes/gateway.env  →  API_SERVER_KEY=<key>
 EnvironmentFile=-/etc/coding-hermes/gateway.env
 

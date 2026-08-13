@@ -106,6 +106,21 @@ sudo systemctl enable --now coding-hermes-scheduler
 sudo systemctl status coding-hermes-scheduler
 ```
 
+The gateway API key is loaded from a 0600 env file (`/etc/coding-hermes/gateway.env` →
+`API_SERVER_KEY=...`, template: `deploy/gateway.env.example`) via `EnvironmentFile`;
+`cmd/schedulerd/main.go` defaults `--gateway-key` to `$API_SERVER_KEY`. **Never pass
+`--gateway-key` on the command line** — argv is world-readable via `ps aux` (GAP-038).
+
+### Local layout note (double nesting)
+
+This repo's canonical checkout on the fleet host lives at
+`/home/kara/coding-hermes-scheduler/coding-herms-scheduler/` (typo'd double
+nesting — the outer `/home/kara/coding-hermes-scheduler/` directory is NOT the
+repo; it holds only the outer `.coding-hermes/tasks.md` pointer and previously
+a stale `schedulerd` binary, removed 2026-08-13). Build and run from the inner
+checkout: `bin/schedulerd` (the systemd unit builds it via `ExecStartPre`).
+`repo_url` for the repo is `github.com/coding-hermes/scheduler` (GAP-039/040).
+
 ### Dedicated Gateway (recommended for production)
 
 For production fleets, run the scheduler on a dedicated Hermes gateway instance (separate cgroup, isolated MCPs, independent restart cycle). See [deploy/gateway-setup.md](deploy/gateway-setup.md) for full setup instructions.
