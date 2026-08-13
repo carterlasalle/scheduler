@@ -964,5 +964,37 @@ tasks:
     > 1800 with slots=0/4, restarts the daemon via the canonical helper and logs the
     action; probe verified with a live dry-run + documented test of the stall signature
     (2026-08-13: 1h28m frozen, zero EVAL/TICK lines, recovered only via external SIGTERM)'
-  status: pending
+  status: complete
   created_at: '2026-08-13T13:46:26.519214+00:00'
+  completed_at: '2026-08-13T16:19:04.610935+00:00'
+- id: GAP-038
+  title: Gateway key out of daemon argv
+  criteria:
+  - 'PASS: ps aux | grep schedulerd | grep -c gateway-key == 0; /etc/coding-hermes/gateway.env
+    mode 0600; /api/v1/health spawns_http increasing and spawns_exec 0 after restart;
+    deploy service template + README/AGENTS.md ops note committed'
+  status: pending
+  created_at: '2026-08-13T19:17:48.978253+00:00'
+- id: GAP-039
+  title: Refresh stale outer board pointer tasks.md
+  criteria:
+  - 'PASS: /home/kara/coding-hermes-scheduler/.coding-hermes/tasks.md absent or its
+    Pending list matches the board pending count (2 fixtures + 4 GAP rows) with date
+    stamp; double-nesting documented in README'
+  status: pending
+  created_at: '2026-08-13T19:17:49.090783+00:00'
+- id: GAP-040
+  title: Remove stale outer schedulerd binary + document nesting
+  criteria:
+  - 'PASS: ls /home/kara/coding-hermes-scheduler/schedulerd absent (or wrapper); nesting
+    documented in README/AGENTS.md'
+  status: pending
+  created_at: '2026-08-13T19:17:49.210898+00:00'
+- id: GAP-041
+  title: Enable auto-disable failure-rate threshold 0.9
+  criteria:
+  - 'PASS: daemon started with a nonzero auto-disable threshold (GET /api/v1/config
+    auto_disable_failure_rate == 0.9) or HIGH event/dashboard warning surfaced for
+    ch-delta'
+  status: pending
+  created_at: '2026-08-13T19:17:49.331320+00:00'
