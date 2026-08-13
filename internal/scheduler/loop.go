@@ -36,15 +36,18 @@ type Loop struct {
 	// or exceeds it. Zero = feature off.
 	autoDisablePolicy autoDisablePolicy
 
-	mu         sync.RWMutex
-	running    sync.WaitGroup
-	stopCh     chan struct{}
-	pauseCh    chan bool
-	evalCh     chan struct{} // event-driven eval trigger (SlotFreed → debounce → evalCh)
-	lastEval   time.Time
-	simulate   bool
-	simSuccess float64
-	noDeliver  bool // suppress Telegram delivery (verify mode, tests)
+	mu       sync.RWMutex
+	running  sync.WaitGroup
+	stopCh   chan struct{}
+	pauseCh  chan bool
+	evalCh   chan struct{} // event-driven eval trigger (SlotFreed → debounce → evalCh)
+	lastEval time.Time
+	// lastStallEvent is when the GAP-042 stall watchdog last emitted its
+	// HIGH event (zero = never). Guards the stall-event throttle.
+	lastStallEvent time.Time
+	simulate       bool
+	simSuccess     float64
+	noDeliver      bool // suppress Telegram delivery (verify mode, tests)
 }
 
 // autoDisablePolicy is the configurable failure-rate auto-disable policy.
@@ -269,6 +272,13 @@ func (l *Loop) Run() {
 			}
 			log.Printf("LOOP: health (goroutines=%d, slots=%d/%d, last_eval=%v)",
 				runtime.NumGoroutine(), running, l.maxConcur, l.lastEval.Format("15:04:05"))
+			// GAP-042: the event-driven loop has no periodic eval trigger —
+			// an idle fleet (0 running, everything in cooldown) never
+			// re-evaluates, so cooldown-expired projects sit unscheduled
+			// indefinitely (observed 66-min silent gap 2026-08-13). Detect
+			// the stale lastEval here, where the health ticker always fires,
+			// and force re-evaluation + HIGH event.
+			l.checkEvalStall(running)
 		case <-slotFreedCh:
 			debounceMu.Lock()
 			if debounceTimer != nil {
@@ -316,6 +326,68 @@ func (l *Loop) LastEvalTime() time.Time {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.lastEval
+}
+
+// evalStallThreshold is the lastEval age at which the event-driven loop is
+// considered stalled (GAP-042): 10x the 30s min-interval = 5 minutes. A
+// healthy loop re-evaluates on every slot-freed event (5s debounce), so
+// lastEval never ages this far while ticks are completing; when the fleet
+// is fully idle (every project in cooldown, 0 running ticks) NOTHING
+// triggers an evaluation — cooldown-expired projects can sit unscheduled
+// for up to their cooldown (observed 66-min silent gap 2026-08-13
+// 13:08-14:14 local, recovered only by manual POST /api/v1/evaluate).
+const evalStallThreshold = 10 * 30 * time.Second // 10 x min-interval
+
+// evalStallReEmitGap re-emits the HIGH stall event while a stall persists
+// (forced re-evaluations not restoring the loop), so a wedged loop stays
+// visible without event spam.
+const evalStallReEmitGap = 30 * time.Minute
+
+// checkEvalStall is the GAP-042 in-loop stall watchdog. It runs from the
+// 30s health ticker — which always fires, unlike the escalator
+// (CheckSchedulerHealth only runs inside evaluate(), so a loop that never
+// evaluates never escalates). When lastEval has been frozen past
+// evalStallThreshold with zero in-flight ticks, the loop has no pending
+// trigger: force one and emit a HIGH event at stall onset, re-emitted
+// every evalStallReEmitGap while the stall persists.
+func (l *Loop) checkEvalStall(running int) {
+	l.mu.RLock()
+	lastEval := l.lastEval
+	l.mu.RUnlock()
+	if lastEval.IsZero() {
+		return // never evaluated — the initial eval fires at startup
+	}
+	age := time.Since(lastEval)
+	if age < evalStallThreshold || running > 0 {
+		return // healthy: evaluating on cadence, or work in flight
+	}
+
+	now := time.Now()
+	l.mu.Lock()
+	emit := l.lastStallEvent.IsZero() || now.Sub(l.lastStallEvent) >= evalStallReEmitGap
+	if emit {
+		l.lastStallEvent = now
+	}
+	l.mu.Unlock()
+
+	// Force re-evaluation on every stall crossing (cheap: an idle fleet
+	// evaluates to zero picks). A wedged evaluate() cannot consume the
+	// channel, so this never makes a broken loop worse.
+	select {
+	case l.evalCh <- struct{}{}:
+	default:
+	}
+	if !emit {
+		return
+	}
+	log.Printf("EVAL-STALL: last eval %v ago with %d running ticks — forced re-evaluation (threshold %v)",
+		age.Round(time.Second), running, evalStallThreshold)
+	l.events.Emit(context.Background(), SeverityHigh, "loop", "eval loop stalled — forced re-evaluation", map[string]any{
+		"age_seconds":  age.Seconds(),
+		"last_eval":    lastEval.Format(time.RFC3339),
+		"active_ticks": running,
+		"threshold_s":  evalStallThreshold.Seconds(),
+	})
 }
 
 // SpawnMethodCounts returns HTTP and exec spawn counts since last restart.
