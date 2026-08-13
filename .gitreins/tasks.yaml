@@ -973,28 +973,44 @@ tasks:
   - 'PASS: ps aux | grep schedulerd | grep -c gateway-key == 0; /etc/coding-hermes/gateway.env
     mode 0600; /api/v1/health spawns_http increasing and spawns_exec 0 after restart;
     deploy service template + README/AGENTS.md ops note committed'
-  status: pending
+  status: complete
   created_at: '2026-08-13T19:17:48.978253+00:00'
+  completed_at: '2026-08-13T19:24:02.928143+00:00'
 - id: GAP-039
   title: Refresh stale outer board pointer tasks.md
   criteria:
   - 'PASS: /home/kara/coding-hermes-scheduler/.coding-hermes/tasks.md absent or its
     Pending list matches the board pending count (2 fixtures + 4 GAP rows) with date
     stamp; double-nesting documented in README'
-  status: pending
+  status: complete
   created_at: '2026-08-13T19:17:49.090783+00:00'
+  completed_at: '2026-08-13T19:31:08.664057+00:00'
 - id: GAP-040
   title: Remove stale outer schedulerd binary + document nesting
   criteria:
   - 'PASS: ls /home/kara/coding-hermes-scheduler/schedulerd absent (or wrapper); nesting
     documented in README/AGENTS.md'
-  status: pending
+  status: complete
   created_at: '2026-08-13T19:17:49.210898+00:00'
+  completed_at: '2026-08-13T19:33:09.981884+00:00'
 - id: GAP-041
   title: Enable auto-disable failure-rate threshold 0.9
   criteria:
   - 'PASS: daemon started with a nonzero auto-disable threshold (GET /api/v1/config
     auto_disable_failure_rate == 0.9) or HIGH event/dashboard warning surfaced for
     ch-delta'
-  status: pending
+  status: complete
   created_at: '2026-08-13T19:17:49.331320+00:00'
+  completed_at: '2026-08-13T19:33:41.733553+00:00'
+- id: GAP-042
+  title: 'Eval-stall watchdog: force re-evaluation + HIGH event'
+  criteria:
+  - "PASS: loop.go has checkEvalStall on the 30s health ticker forcing re-evaluation\
+    \ (evalCh) when lastEval age >= 10x min-interval (5 min) with 0 running ticks;\
+    \ HIGH 'loop' event 'eval loop stalled \u2014 forced re-evaluation' emitted at\
+    \ onset with age_seconds/last_eval details, throttled to re-emit every 30 min\
+    \ while stalled; go build/vet/gofmt clean; go test -short -p 1 ./... 9/9 pkgs;\
+    \ golangci-lint 0 issues; eval_stall_test.go covers healthy/busy/never-eval/onset/throttle/re-emit"
+  status: complete
+  created_at: '2026-08-13T19:41:09.728371+00:00'
+  completed_at: '2026-08-13T19:41:43.384373+00:00'
