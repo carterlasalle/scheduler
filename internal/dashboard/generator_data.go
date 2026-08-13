@@ -28,20 +28,23 @@ type QueueData struct {
 
 // FleetRow is one project in the fleet overview table.
 type FleetRow struct {
-	Name        string
-	Weight      int
-	Priority    int
-	Enabled     bool
-	LastTick    string
-	LastOutcome string
-	SessionID   string
-	Urgency     float64
-	RunningNow  int // 0 or 1; int avoids modernc.org/sqlite int→bool scan bug
-	Completed   int
-	Failed      int
-	Timeout     int
-	CostToday   float64
-	CostWeek    float64
+	Name           string
+	Weight         int
+	Priority       int
+	Enabled        bool
+	LastTick       string
+	LastOutcome    string
+	SessionID      string
+	Urgency        float64
+	RunningNow     int // 0 or 1; int avoids modernc.org/sqlite int→bool scan bug
+	Completed      int
+	Failed         int
+	Timeout        int
+	CostToday      float64
+	CostWeek       float64
+	DisabledBy     string // GAP-044 disable provenance
+	DisabledReason string
+	DisabledAt     string
 }
 
 // TickRow is one tick in the history table.
@@ -161,6 +164,9 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 	projectQuery := `
 		SELECT
 			p.name, p.weight, p.priority, p.enabled,
+			COALESCE(p.disabled_by, '')               AS disabled_by,
+			COALESCE(p.disabled_reason, '')           AS disabled_reason,
+			COALESCE(p.disabled_at, '')               AS disabled_at,
 			COALESCE(t.spawned_at, '')            AS last_tick,
 			COALESCE(t2.outcome, '')               AS last_outcome,
 			COALESCE(t2.session_id, '')            AS session_id,
@@ -196,6 +202,7 @@ func (g *Generator) collect(ctx context.Context) FleetData {
 		for rows.Next() {
 			var r FleetRow
 			if err := rows.Scan(&r.Name, &r.Weight, &r.Priority, &r.Enabled,
+				&r.DisabledBy, &r.DisabledReason, &r.DisabledAt,
 				&r.LastTick, &r.LastOutcome, &r.SessionID,
 				&r.RunningNow, &r.Completed, &r.Failed, &r.Timeout,
 				&r.CostToday, &r.CostWeek); err != nil {

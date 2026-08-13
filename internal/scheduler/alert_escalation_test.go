@@ -23,7 +23,10 @@ func setupTestDB(t *testing.T) *sql.DB {
 			enabled INTEGER DEFAULT 1,
 			cooldown_s INTEGER DEFAULT 1800,
 			workdir TEXT DEFAULT '',
-			updated_at TEXT
+			updated_at TEXT,
+			disabled_at TEXT,
+			disabled_by TEXT,
+			disabled_reason TEXT
 		);
 		CREATE TABLE IF NOT EXISTS ticks (
 			id TEXT PRIMARY KEY,
@@ -461,6 +464,22 @@ func TestAutoDisable_DisablesHighFailureProject(t *testing.T) {
 	}
 	if n := countEventsBySeverity(t, db, "HIGH"); n != 1 {
 		t.Errorf("expected 1 HIGH auto-disable event, got %d", n)
+	}
+	// GAP-044: auto-disable must stamp provenance (who/when/why).
+	var disabledBy, disabledAt, disabledReason string
+	if err := db.QueryRow(
+		`SELECT COALESCE(disabled_by,''), COALESCE(disabled_at,''), COALESCE(disabled_reason,'') FROM projects WHERE name = 'failing-proj'`,
+	).Scan(&disabledBy, &disabledAt, &disabledReason); err != nil {
+		t.Fatalf("read provenance: %v", err)
+	}
+	if disabledBy != "auto-disable" {
+		t.Errorf("disabled_by = %q, want \"auto-disable\"", disabledBy)
+	}
+	if disabledAt == "" {
+		t.Error("disabled_at empty — auto-disable must stamp a timestamp")
+	}
+	if !strings.Contains(disabledReason, "96.0%") {
+		t.Errorf("disabled_reason = %q, want failure stats including 96.0%%", disabledReason)
 	}
 }
 

@@ -6,6 +6,6 @@
 <td>{{.Priority}}</td>
 <td class="meta">{{shortTime .LastTick}}</td>
 <td class="{{if eq .LastOutcome "committed"}}status-ok{{else if eq .LastOutcome "failed"}}status-fail{{end}}">{{.LastOutcome}}</td>
-<td>{{if .RunningNow}}<span class="running-dot"></span>running{{end}}</td>
+<td>{{if .RunningNow}}<span class="running-dot"></span>running{{else if not .Enabled}}{{if .DisabledReason}}<span class="status-fail" title="disabled by {{.DisabledBy}} at {{.DisabledAt}}: {{.DisabledReason}}">disabled</span>{{else}}disabled{{end}}{{end}}</td>
 </tr>{{end}}
 </tbody>{{end}}

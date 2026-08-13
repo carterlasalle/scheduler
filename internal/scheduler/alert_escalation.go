@@ -353,10 +353,14 @@ func (ae *AlertEscalator) CheckFailureRateAutoDisable(ctx context.Context) error
 			continue // below threshold
 		}
 
-		// Disable the project.
+		// Disable the project (GAP-044: stamp provenance — who/when/why —
+		// so disabled fleet state stays auditable).
+		nowStr := time.Now().UTC().Format(time.RFC3339)
+		reason := fmt.Sprintf("failure rate %.1f%% (%d/%d ticks, window %d, threshold %.2f)",
+			rate*100, failed, total, window, ae.autoDisable.failureRate)
 		_, err = ae.db.ExecContext(ctx,
-			`UPDATE projects SET enabled = 0, updated_at = ? WHERE name = ? AND enabled = 1`,
-			time.Now().UTC().Format(time.RFC3339), name)
+			`UPDATE projects SET enabled = 0, disabled_at = ?, disabled_by = 'auto-disable', disabled_reason = ?, updated_at = ? WHERE name = ? AND enabled = 1`,
+			nowStr, reason, nowStr, name)
 		if err != nil {
 			log.Printf("AUTO-DISABLE: failed to disable %s: %v", name, err)
 			continue
@@ -368,13 +372,16 @@ func (ae *AlertEscalator) CheckFailureRateAutoDisable(ctx context.Context) error
 		ae.events.Emit(ctx, SeverityHigh, "auto-disable",
 			fmt.Sprintf("project auto-disabled: %s — %.1f%% failure rate (%d/%d ticks)", name, rate*100, failed, total),
 			map[string]any{
-				"project":      name,
-				"failure_rate": rate,
-				"failed":       failed,
-				"total":        total,
-				"window":       window,
-				"min_ticks":    minTicks,
-				"threshold":    ae.autoDisable.failureRate,
+				"project":         name,
+				"failure_rate":    rate,
+				"failed":          failed,
+				"total":           total,
+				"window":          window,
+				"min_ticks":       minTicks,
+				"threshold":       ae.autoDisable.failureRate,
+				"disabled_at":     nowStr,
+				"disabled_by":     "auto-disable",
+				"disabled_reason": reason,
 			})
 	}
 	return nil

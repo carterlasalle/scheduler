@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -159,6 +160,20 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
+	ctx := context.Background()
+	// GAP-044: an enabled→disabled transition through PUT is a disable
+	// path — the DB layer stamps provenance; the events table gets a
+	// matching entry here.
+	cur, err := database.GetProject(ctx, s.db, name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, 404, "project not found")
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	wasEnabled := cur.Enabled
 	// DecayRate guard: 0 makes urgency flat (priority × 1^0) so the project is
 	// never picked by the packer — a silent permanent starvation. Foremen must
 	// not be able to do this to themselves. Proven: dexdat-memory starved 87h
@@ -167,7 +182,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, 400, "decay_rate must be > 0 (0 causes permanent starvation — urgency never grows)")
 		return
 	}
-	if err := database.UpdateProject(context.Background(), s.db, name, updates); err != nil {
+	if err := database.UpdateProject(ctx, s.db, name, updates); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, 404, "project not found")
 			return
@@ -179,14 +194,35 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, 500, err.Error())
 		return
 	}
-	p, _ := database.GetProject(context.Background(), s.db, name)
+	p, err := database.GetProject(ctx, s.db, name)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	// GAP-044: log a matching events-table entry when this PUT disabled
+	// a previously-enabled project.
+	if wasEnabled && updates.Enabled != nil && !*updates.Enabled {
+		logDisableEvent(ctx, s.db, name, p.DisabledBy, p.DisabledReason, p.DisabledAt)
+	}
 	writeJSON(w, 200, p)
 }
 
 func (s *Server) pauseProject(w http.ResponseWriter, r *http.Request, name string) {
-	if err := database.UpdateProject(context.Background(), s.db, name, database.ProjectUpdates{Enabled: database.BoolPtr(false)}); err != nil {
+	ctx := context.Background()
+	// GAP-044: pause is a disable path — stamp explicit provenance so the
+	// row and the events table both carry who/when/why.
+	by := "api-pause"
+	reason := "paused via POST /projects/{name}/pause"
+	if err := database.UpdateProject(ctx, s.db, name, database.ProjectUpdates{
+		Enabled:        database.BoolPtr(false),
+		DisabledBy:     &by,
+		DisabledReason: &reason,
+	}); err != nil {
 		writeError(w, 500, err.Error())
 		return
+	}
+	if p, err := database.GetProject(ctx, s.db, name); err == nil {
+		logDisableEvent(ctx, s.db, name, p.DisabledBy, p.DisabledReason, p.DisabledAt)
 	}
 	writeJSON(w, 200, map[string]string{"status": "paused", "project": name})
 }
@@ -230,7 +266,30 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request, name stri
 		writeError(w, 500, err.Error())
 		return
 	}
+	// GAP-044: the DELETE soft-delete stamps provenance (api-delete,
+	// legacy-backfilling COALESCE) — mirror it into the events table.
+	if p, err := database.GetProject(ctx, s.db, name); err == nil {
+		logDisableEvent(ctx, s.db, name, p.DisabledBy, p.DisabledReason, p.DisabledAt)
+	}
 	writeJSON(w, 200, map[string]string{"status": "deleted", "project": name})
+}
+
+// logDisableEvent records a GAP-044 disable-provenance entry in the events
+// table so every API disable path (pause, PUT enabled=false, DELETE
+// confirm=true) has a matching audit row with who/when/why.
+func logDisableEvent(ctx context.Context, db *sql.DB, name, by, reason, at string) {
+	details, _ := json.Marshal(map[string]string{
+		"project":         name,
+		"disabled_by":     by,
+		"disabled_reason": reason,
+		"disabled_at":     at,
+	})
+	_ = database.LogEvent(ctx, db, &database.Event{
+		Severity:  database.SeverityInfo,
+		Component: "api",
+		Message:   fmt.Sprintf("project disabled: %s (%s)", name, by),
+		Details:   string(details),
+	})
 }
 
 // spawnProject handles POST /api/v1/projects/:name/spawn.

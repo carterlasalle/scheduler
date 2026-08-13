@@ -26,6 +26,14 @@ type Project struct {
 	LastTickStarted   string  `json:"last_tick_started"`   // RFC3339 of most recent tick spawn; "" when never spawned
 	LastTickCompleted string  `json:"last_tick_completed"` // RFC3339 of most recent tick completion (any outcome); "" when never completed
 
+	// Disable provenance (GAP-044): who disabled the project, when, and
+	// why. All empty when the project has never been disabled (or was
+	// re-enabled). Written by every disable path (API pause/PUT/DELETE,
+	// auto-disable) so fleet-state changes stay auditable.
+	DisabledAt     string `json:"disabled_at"`     // RFC3339 when disabled; "" = enabled/never disabled
+	DisabledBy     string `json:"disabled_by"`     // "api" | "api-pause" | "api-delete" | "auto-disable"
+	DisabledReason string `json:"disabled_reason"` // human-readable why (failure stats for auto-disable)
+
 	// ConsecutiveFailures counts consecutive SPAWN failures (gateway
 	// unreachable, process start error). Incremented by Spawner.Spawn on
 	// failure, reset to 0 on the first successful spawn. Drives the
@@ -105,6 +113,9 @@ func (p *Project) UnmarshalJSON(data []byte) error {
 	setString("UpdatedAt", &p.UpdatedAt)
 	setString("LastTickStarted", &p.LastTickStarted)
 	setString("LastTickCompleted", &p.LastTickCompleted)
+	setString("DisabledAt", &p.DisabledAt)
+	setString("DisabledBy", &p.DisabledBy)
+	setString("DisabledReason", &p.DisabledReason)
 	return nil
 }
 

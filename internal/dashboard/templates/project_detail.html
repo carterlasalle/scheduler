@@ -41,6 +41,10 @@ tr:last-child td{border-bottom:none}
 <div class="card"><div class="label">Priority</div><div class="value">{{.Project.Priority}}</div></div>
 <div class="card"><div class="label">Cooldown</div><div class="value">{{.Project.CooldownS}}s</div></div>
 <div class="card"><div class="label">Enabled</div><div class="value">{{if .Project.Enabled}}<span class="status-ok">yes</span>{{else}}<span class="status-fail">no</span>{{end}}</div></div>
+{{if not .Project.Enabled}}<div class="card"><div class="label">Disabled by</div><div class="value">{{if .Project.DisabledBy}}{{.Project.DisabledBy}}{{else}}—{{end}}</div></div>
+<div class="card"><div class="label">Disabled at</div><div class="value">{{if .Project.DisabledAt}}{{shortTime .Project.DisabledAt}}{{else}}—{{end}}</div></div>
+<div class="card"><div class="label">Disabled reason</div><div class="value">{{if .Project.DisabledReason}}{{.Project.DisabledReason}}{{else}}—{{end}}</div></div>
+{{end}}
 </div>
 
 <h2>Latest Tick</h2>

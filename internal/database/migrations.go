@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 11
+const latestMigration = 12
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -199,6 +199,15 @@ ALTER TABLE ticks ADD COLUMN heartbeat_at TEXT;
 		desc:    "partial covering index on ticks(status, completed_at) for /api/v1/status outcome counts (S-GAP-007)",
 		stmt: `
 CREATE INDEX IF NOT EXISTS idx_ticks_status_completed ON ticks(status, completed_at) WHERE completed_at IS NOT NULL;
+`,
+	},
+	{
+		version: 12,
+		desc:    "add disable provenance columns to projects (GAP-044)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN disabled_at TEXT;
+ALTER TABLE projects ADD COLUMN disabled_by TEXT;
+ALTER TABLE projects ADD COLUMN disabled_reason TEXT;
 `,
 	},
 }
