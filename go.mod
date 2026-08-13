@@ -2,7 +2,7 @@ module github.com/coding-herms/scheduler
 
 go 1.26
 
-toolchain go1.26.5
+toolchain go1.26.6
 
 require modernc.org/sqlite v1.54.0
 
