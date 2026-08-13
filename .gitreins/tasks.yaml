@@ -938,3 +938,31 @@ tasks:
   status: complete
   created_at: '2026-08-12T09:52:08.563646+00:00'
   completed_at: '2026-08-12T09:53:09.225328+00:00'
+- id: GAP-035
+  title: Gateway-key spawn regression guard (option B)
+  criteria:
+  - go test ./internal/scheduler/ includes a gateway-key acceptance test (spawn validates
+    per-project key before dispatch; 401 classified terminal, fail-fast, no silent
+    flood)
+  status: complete
+  created_at: '2026-08-13T11:40:34.363881+00:00'
+  completed_at: '2026-08-13T11:40:48.787471+00:00'
+- id: GAP-036
+  title: Document board-task selection behavior
+  criteria:
+  - commit in internal/scheduler documenting the selection model (daemon schedules
+    projects by urgency; foremen pick task rows; fixtures.jsonl rows run on cadence;
+    blocked rows user-gated)
+  status: complete
+  created_at: '2026-08-13T11:40:34.475756+00:00'
+  completed_at: '2026-08-13T11:42:27.610026+00:00'
+- id: GAP-037
+  title: "P2 \u2014 eval-loop stall watchdog (fleet-auto-heal.py): detect frozen last_eval\
+    \ / climbing evaluation_age_seconds >30min with slots=0/4 and restart schedulerd"
+  criteria:
+  - 'fleet-auto-heal.py (or a new module) probes /api/v1/health; when evaluation_age_seconds
+    > 1800 with slots=0/4, restarts the daemon via the canonical helper and logs the
+    action; probe verified with a live dry-run + documented test of the stall signature
+    (2026-08-13: 1h28m frozen, zero EVAL/TICK lines, recovered only via external SIGTERM)'
+  status: pending
+  created_at: '2026-08-13T13:46:26.519214+00:00'
