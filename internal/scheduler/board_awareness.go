@@ -27,6 +27,46 @@ import (
 // already eligible (cooldown elapsed, not running) — cooldown checks are
 // untouched (prepaid-bucket economics).
 
+// Board-task selection model (GAP-036, documented 2026-08-13).
+// Selection happens in TWO layers; conflating them makes this project's own
+// oldest board rows look "ignored" when they are actually fixtures or gates:
+//
+// (a) PROJECT selection is the daemon's job (this package): Loop.evaluate
+//     (tick_process.go) picks PROJECTS each eval via the multi-pool packer
+//     (multipool_packer.go) or the flat fallback (packer.go/packer_select.go),
+//     ordered by urgency = priority * (1 + elapsed/interval)^decayRate
+//     (urgency.go) with three boost tiers — organic (~12k live), this pending
+//     boost (5e11, SCHED-GAP-019), and the starvation boost (1e12, S-GAP-001).
+//     Cooldown and the running set are hard gates; no boost bypasses cooldown.
+//     The daemon never reads or selects individual board TASK rows.
+//
+// (b) TASK selection belongs to each project's FOREMAN: the spawn prompt
+//     (spawn.go) tells the session to read ".coding-hermes/board/tasks.jsonl"
+//     and execute one foreman tick per the foreman skill — the foreman picks
+//     rows on priority/age/deps and writes status/attempts back. This repo's
+//     own board is .coding-hermes/board/{tasks,events,fixtures,board}.jsonl
+//     (git-tracked).
+//
+// (c) Fixture rows — .coding-hermes/board/fixtures.jsonl (E2E-001,
+//     NEVER-DONE, GITREINS-JUDGE) — are perpetual recurring chores, not
+//     dispatchable tasks. The foreman runs them on cadence (E2E-001 light
+//     every tick, full battery every +5; NEVER-DONE full 12-point every +3),
+//     so their tasks.jsonl rows legitimately stay status=pending/attempts=0
+//     forever. Run evidence is in each row's worker_summary and in
+//     events.jsonl detail.fixtures (e.g. "E2E-001 FULL battery ran tick #344
+//     ... next full due #349+"); pending/attempts=0 on a fixture is EXPECTED.
+//
+// (d) Blocked rows — status=blocked with blocked_reason set (e.g. FIX-STACK,
+//     "Bane defers (systemd enable decision)") — are USER-GATED and stay
+//     blocked until an operator unblocks; CountPending below deliberately
+//     counts only status=="pending", never blocked rows.
+//
+// (e) The boost below affects ONLY (a): pending rows raise PROJECT urgency so
+//     a project with fresh board work is picked sooner. It cannot dispatch,
+//     unblock, or complete a task row. Fixture rows count toward the pending
+//     total, so projects with active fixtures carry a permanent (benign)
+//     pending boost.
+
 const (
 	// pendingBoostUrgency is the BASE of the board-awareness boost — far
 	// above any organically reachable urgency (live fleet tops out ~12k), so
