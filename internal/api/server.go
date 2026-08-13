@@ -140,6 +140,14 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"failure_window":         s.failureWindow,
 		"last_evaluation":        lastEval,
 	}
+	// GAP-043: zero-select diagnostics — consecutive zero-select evals with
+	// eligible projects present, and the eligible count at the last one.
+	if s.loop != nil {
+		zsCount, zsEligible, zsLast := s.loop.ZeroSelectStats()
+		status["zero_select_consecutive"] = zsCount
+		status["zero_select_eligible"] = zsEligible
+		status["zero_select_last_at"] = zsLast
+	}
 	if s.duckbrainHealth != nil {
 		status["duckbrain"] = s.duckbrainHealth()
 	}

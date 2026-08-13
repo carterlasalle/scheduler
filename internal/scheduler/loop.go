@@ -45,9 +45,19 @@ type Loop struct {
 	// lastStallEvent is when the GAP-042 stall watchdog last emitted its
 	// HIGH event (zero = never). Guards the stall-event throttle.
 	lastStallEvent time.Time
-	simulate       bool
-	simSuccess     float64
-	noDeliver      bool // suppress Telegram delivery (verify mode, tests)
+	// GAP-043 zero-select monitoring: consecutive evals that selected 0
+	// projects while eligible (enabled, not running, cooldown elapsed)
+	// projects existed. Evaluations log nothing on a zero select, so an
+	// operator cannot distinguish "evaluating" from "evaluating nothing"
+	// (observed 2026-08-13 20:55-21:08Z). Once zeroSelectThreshold
+	// consecutive zero-selects accumulate, a distinct EVAL-ZERO-SELECT
+	// line + HIGH event fire, re-emitted at most every zeroSelectReEmitGap.
+	zeroSelectCount     int
+	zeroSelectEligible  int
+	lastZeroSelectEvent time.Time
+	simulate            bool
+	simSuccess          float64
+	noDeliver           bool // suppress Telegram delivery (verify mode, tests)
 }
 
 // autoDisablePolicy is the configurable failure-rate auto-disable policy.
@@ -343,6 +353,18 @@ const evalStallThreshold = 10 * 30 * time.Second // 10 x min-interval
 // visible without event spam.
 const evalStallReEmitGap = 30 * time.Minute
 
+// zeroSelectThreshold is the number of consecutive zero-select evaluations
+// (with eligible projects present) before EVAL-ZERO-SELECT fires (GAP-043).
+// Two is chosen so a single transient empty pick (e.g. every project in
+// cooldown) does not alarm, while a persistent pattern surfaces within
+// ~2 eval cycles as required by the acceptance criteria.
+const zeroSelectThreshold = 2
+
+// zeroSelectReEmitGap re-emits the HIGH zero-select event while the
+// condition persists (mirrors evalStallReEmitGap) — the first emit happens
+// at threshold, subsequent ones at most once per gap.
+const zeroSelectReEmitGap = 30 * time.Minute
+
 // checkEvalStall is the GAP-042 in-loop stall watchdog. It runs from the
 // 30s health ticker — which always fires, unlike the escalator
 // (CheckSchedulerHealth only runs inside evaluate(), so a loop that never
@@ -393,4 +415,102 @@ func (l *Loop) checkEvalStall(running int) {
 // SpawnMethodCounts returns HTTP and exec spawn counts since last restart.
 func (l *Loop) SpawnMethodCounts() (httpCount, execCount int64) {
 	return l.spawner.SpawnMethodCounts()
+}
+
+// noteZeroSelect records a zero-project evaluation (GAP-043). Called from
+// evaluate() while l.mu is held (write lock). When eligible projects exist
+// and the consecutive count reaches zeroSelectThreshold, a distinct
+// EVAL-ZERO-SELECT log line and a HIGH event fire — re-emitted at most
+// once per zeroSelectReEmitGap so a persistent condition stays visible
+// without event spam. A zero select with NO eligible projects (normal
+// fleet-idle) resets the counter.
+func (l *Loop) noteZeroSelect(now time.Time, runningSet map[string]bool) {
+	eligible := l.countEligibleProjects(now, runningSet)
+	if eligible == 0 {
+		l.zeroSelectCount = 0
+		l.zeroSelectEligible = 0
+		return
+	}
+	l.zeroSelectCount++
+	l.zeroSelectEligible = eligible
+	if l.zeroSelectCount < zeroSelectThreshold {
+		return
+	}
+
+	emit := l.lastZeroSelectEvent.IsZero() || now.Sub(l.lastZeroSelectEvent) >= zeroSelectReEmitGap
+	if emit {
+		l.lastZeroSelectEvent = now
+	}
+	log.Printf("EVAL-ZERO-SELECT: %d consecutive zero-select eval(s) with %d eligible project(s) — evaluation is picking nothing",
+		l.zeroSelectCount, eligible)
+	if !emit {
+		return
+	}
+	l.events.Emit(context.Background(), SeverityHigh, "loop",
+		"evaluation selected 0 projects while eligible projects exist", map[string]any{
+			"consecutive":  l.zeroSelectCount,
+			"eligible":     eligible,
+			"threshold":    zeroSelectThreshold,
+			"reemit_gap_s": zeroSelectReEmitGap.Seconds(),
+			"last_eval":    now.UTC().Format(time.RFC3339),
+			"active_ticks": len(runningSet),
+		})
+}
+
+// resetZeroSelect clears the GAP-043 consecutive zero-select counter.
+// Called from evaluate() when a selection did occur.
+func (l *Loop) resetZeroSelect() {
+	l.zeroSelectCount = 0
+	l.zeroSelectEligible = 0
+}
+
+// countEligibleProjects counts enabled projects that are not currently
+// running and whose cooldown has elapsed (never completed counts as
+// eligible). These are the projects a healthy evaluation COULD have
+// picked — a zero select with eligible > 0 is the GAP-043 anomaly signal.
+func (l *Loop) countEligibleProjects(now time.Time, runningSet map[string]bool) int {
+	rows, err := l.db.QueryContext(context.Background(),
+		`SELECT name, cooldown_s, COALESCE(last_tick_completed, '') FROM projects WHERE enabled = 1`)
+	if err != nil {
+		log.Printf("EVAL-ZERO-SELECT: query eligible projects: %v", err)
+		return 0
+	}
+	defer rows.Close()
+	eligible := 0
+	for rows.Next() {
+		var name string
+		var cooldown int
+		var lastComp string
+		if err := rows.Scan(&name, &cooldown, &lastComp); err != nil {
+			continue
+		}
+		if runningSet[name] {
+			continue
+		}
+		if lastComp == "" {
+			eligible++
+			continue
+		}
+		comp, err := time.Parse(time.RFC3339, lastComp)
+		if err != nil {
+			eligible++ // unknown completion time — treat as eligible
+			continue
+		}
+		if now.Sub(comp) >= time.Duration(cooldown)*time.Second {
+			eligible++
+		}
+	}
+	return eligible
+}
+
+// ZeroSelectStats exposes GAP-043 diagnostics for /api/v1/status: the
+// consecutive zero-select count, the eligible-project count at the last
+// zero select, and the last zero-select event time ("" = never).
+func (l *Loop) ZeroSelectStats() (consecutive, eligible int, lastEvent string) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if !l.lastZeroSelectEvent.IsZero() {
+		lastEvent = l.lastZeroSelectEvent.UTC().Format(time.RFC3339)
+	}
+	return l.zeroSelectCount, l.zeroSelectEligible, lastEvent
 }

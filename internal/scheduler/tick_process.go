@@ -87,9 +87,21 @@ func (l *Loop) evaluate() {
 	}
 
 	if len(packed) == 0 {
+		// GAP-043: a zero-select eval with eligible projects present is an
+		// anomaly (evaluations log nothing on empty picks — operator cannot
+		// distinguish "evaluating" from "evaluating nothing"). The DB
+		// running set is authoritative here (same source as SCHED-GAP-030).
+		running, _ := l.evalContext(context.Background())
+		runningSet := make(map[string]bool, len(running))
+		for _, name := range running {
+			runningSet[name] = true
+		}
+		l.noteZeroSelect(now, runningSet)
 		l.mu.Unlock()
 		return
 	}
+
+	l.resetZeroSelect()
 
 	log.Printf("EVAL: %d project(s) selected, %d/%d budget used",
 		len(packed), sumWeights(packed), l.weightBudget)

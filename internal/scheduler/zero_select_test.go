@@ -1,0 +1,169 @@
+package scheduler
+
+import (
+	"database/sql"
+	"strings"
+	"testing"
+	"time"
+)
+
+// GAP-043 zero-select monitoring tests. Evaluations log nothing when they
+// pick zero projects, so an operator cannot distinguish "evaluating" from
+// "evaluating nothing" — observed 2026-08-13 20:55-21:08Z (evals every
+// ~5 min, last "EVAL: N selected" line 15:55:06, eligible projects
+// present). noteZeroSelect accumulates consecutive zero-selects (with
+// eligible projects) and emits a HIGH event + log line at threshold.
+
+func insertTestProject(t *testing.T, db *sql.DB, name string, cooldown int, enabled bool, lastCompleted string) {
+	t.Helper()
+	e := 0
+	if enabled {
+		e = 1
+	}
+	_, err := db.Exec(
+		`INSERT INTO projects (name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, enabled, created_at, updated_at, last_tick_completed)
+		 VALUES (?, 'https://example.com/' || ?, '/tmp/' || ?, 10, 5, ?, 1.0, 'm', 'p', ?, datetime('now'), datetime('now'), ?)`,
+		name, name, name, cooldown, e, lastCompleted)
+	if err != nil {
+		t.Fatalf("insert test project %s: %v", name, err)
+	}
+}
+
+func assertZeroSelectEventCount(t *testing.T, db *sql.DB, want int) {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM events WHERE severity = 'HIGH' AND component = 'loop' AND message LIKE 'evaluation selected 0 projects%'`,
+	).Scan(&n); err != nil {
+		t.Fatalf("count zero-select events: %v", err)
+	}
+	if n != want {
+		t.Fatalf("HIGH zero-select events = %d, want %d", n, want)
+	}
+}
+
+// TestZeroSelect_NoEligibleProjectsIsNormal: an empty pick with nothing
+// eligible (fleet idle) resets the counter and emits nothing.
+func TestZeroSelect_NoEligibleProjectsIsNormal(t *testing.T) {
+	db := newTestDB(t)
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+
+	l.noteZeroSelect(time.Now(), map[string]bool{})
+	l.noteZeroSelect(time.Now(), map[string]bool{})
+
+	if l.zeroSelectCount != 0 {
+		t.Fatalf("zeroSelectCount = %d, want 0 (no eligible projects = normal idle)", l.zeroSelectCount)
+	}
+	assertZeroSelectEventCount(t, db, 0)
+}
+
+// TestZeroSelect_ThresholdEmitsEvent: two consecutive zero-selects with an
+// eligible project present fire the HIGH event (within ~2 eval cycles).
+func TestZeroSelect_ThresholdEmitsEvent(t *testing.T) {
+	db := newTestDB(t)
+	insertTestProject(t, db, "km", 900, true, "") // enabled, never completed = eligible
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+
+	l.noteZeroSelect(time.Now(), map[string]bool{})
+	assertZeroSelectEventCount(t, db, 0) // first zero-select: below threshold
+
+	l.noteZeroSelect(time.Now(), map[string]bool{})
+	assertZeroSelectEventCount(t, db, 1) // second consecutive: event fires
+
+	if l.zeroSelectCount != 2 {
+		t.Fatalf("zeroSelectCount = %d, want 2", l.zeroSelectCount)
+	}
+	if l.zeroSelectEligible != 1 {
+		t.Fatalf("zeroSelectEligible = %d, want 1", l.zeroSelectEligible)
+	}
+}
+
+// TestZeroSelect_SelectResetsCounter: a real selection resets the
+// consecutive counter so the anomaly must re-accumulate.
+func TestZeroSelect_SelectResetsCounter(t *testing.T) {
+	db := newTestDB(t)
+	insertTestProject(t, db, "km", 900, true, "")
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+
+	l.noteZeroSelect(time.Now(), map[string]bool{}) // 1
+	l.resetZeroSelect()                             // a selection happened
+	l.noteZeroSelect(time.Now(), map[string]bool{}) // back to 1 — not 2 consecutive
+
+	assertZeroSelectEventCount(t, db, 0)
+	if l.zeroSelectCount != 1 {
+		t.Fatalf("zeroSelectCount = %d, want 1", l.zeroSelectCount)
+	}
+}
+
+// TestZeroSelect_ReEmitThrottled: the event re-emits at most once per
+// zeroSelectReEmitGap while the condition persists.
+func TestZeroSelect_ReEmitThrottled(t *testing.T) {
+	db := newTestDB(t)
+	insertTestProject(t, db, "km", 900, true, "")
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+
+	now := time.Now()
+	l.noteZeroSelect(now, map[string]bool{})
+	l.noteZeroSelect(now, map[string]bool{})
+	assertZeroSelectEventCount(t, db, 1)
+
+	// Immediate third zero-select: throttled, no new event.
+	l.noteZeroSelect(now, map[string]bool{})
+	assertZeroSelectEventCount(t, db, 1)
+
+	// After the re-emit gap: a new event fires.
+	l.noteZeroSelect(now.Add(zeroSelectReEmitGap+time.Minute), map[string]bool{})
+	assertZeroSelectEventCount(t, db, 2)
+}
+
+// TestZeroSelect_EligibleExcludesRunningAndCooldown: countEligibleProjects
+// counts only enabled projects that are not running and whose cooldown has
+// elapsed.
+func TestZeroSelect_EligibleExcludesRunningAndCooldown(t *testing.T) {
+	db := newTestDB(t)
+	insertTestProject(t, db, "never-done", 900, true, "")                                                            // eligible: never completed
+	insertTestProject(t, db, "in-cooldown", 900, true, time.Now().Add(-100*time.Second).UTC().Format(time.RFC3339))  // NOT eligible: cooldown not elapsed
+	insertTestProject(t, db, "cooldown-elapsed", 900, true, time.Now().Add(-2*time.Hour).UTC().Format(time.RFC3339)) // eligible
+	insertTestProject(t, db, "disabled", 900, false, "")                                                             // NOT eligible: disabled
+	insertTestProject(t, db, "running-now", 900, true, "")                                                           // NOT eligible: running
+
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+	got := l.countEligibleProjects(time.Now(), map[string]bool{"running-now": true})
+	if got != 2 {
+		t.Fatalf("countEligibleProjects = %d, want 2 (never-done + cooldown-elapsed)", got)
+	}
+}
+
+// TestZeroSelect_StatsExposed: ZeroSelectStats surfaces the diagnostics for
+// /api/v1/status.
+func TestZeroSelect_StatsExposed(t *testing.T) {
+	db := newTestDB(t)
+	insertTestProject(t, db, "km", 900, true, "")
+	l := NewLoop(db, 30*time.Second, 24*time.Hour, 10, 100, 4)
+
+	c, e, last := l.ZeroSelectStats()
+	if c != 0 || e != 0 || last != "" {
+		t.Fatalf("initial stats = (%d, %d, %q), want (0, 0, \"\")", c, e, last)
+	}
+
+	l.noteZeroSelect(time.Now(), map[string]bool{})
+	l.noteZeroSelect(time.Now(), map[string]bool{})
+
+	c, e, last = l.ZeroSelectStats()
+	if c != 2 || e != 1 {
+		t.Fatalf("stats after two zero-selects = (count %d, eligible %d), want (2, 1)", c, e)
+	}
+	if last == "" {
+		t.Fatal("lastEvent = \"\", want a timestamp after event emit")
+	}
+	// Zero-select events carry the eligible count in details.
+	var details string
+	if err := db.QueryRow(
+		`SELECT details FROM events WHERE severity = 'HIGH' AND component = 'loop' AND message LIKE 'evaluation selected 0 projects%' LIMIT 1`,
+	).Scan(&details); err != nil {
+		t.Fatalf("read event details: %v", err)
+	}
+	if !strings.Contains(details, `"eligible":1`) {
+		t.Fatalf("event details missing eligible count: %s", details)
+	}
+}
