@@ -1055,3 +1055,14 @@ tasks:
   status: complete
   created_at: '2026-08-13T22:22:48.745195+00:00'
   completed_at: '2026-08-13T22:23:58.684487+00:00'
+- id: GAP-045
+  title: 'GAP-045: timeout ticks never stamp completed_at'
+  criteria:
+  - grep -E 'timeoutReapSQL' internal/scheduler/tick_process.go && grep -c 'completed_at'
+    internal/scheduler/tick_process.go > 0 && grep -E 'tickCompletedAtOf' internal/scheduler/sgap003_reaper_test.go
+    internal/scheduler/tick_process_infra012_test.go && go build ./... && go test
+    -count=1 -short -p 1 -run 'TestReapZombies|TestCleanDangling' ./internal/scheduler/
+    2>&1 | grep -q '^ok'
+  status: complete
+  created_at: '2026-08-14T05:07:11.239519+00:00'
+  completed_at: '2026-08-14T05:07:52.977056+00:00'
