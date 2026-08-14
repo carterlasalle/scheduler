@@ -13,7 +13,7 @@ A single Go binary that replaces dozens of static cron jobs with a dynamic, prio
 Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for project X"`, you run ONE binary that:
 
 - **Knows all your projects** — weight, priority, cooldown, model, provider
-- **Evaluates every 60 seconds** — computes urgency for each project
+- **Evaluates on demand** — event-driven (startup, slot-freed debounce, or manual `POST /api/v1/evaluate`) with a 30s min-interval and a 5-min eval-stall watchdog
 - **Packs greedily** — fills a weight budget with the most urgent projects
 - **Spawns foremen via HTTP** — sends prompts to the Hermes gateway API (`POST /v1/responses`) instead of per-process `hermes chat`. Zero subprocess overhead, zero MCP duplication per tick
 - **Falls back gracefully** — if the gateway is unreachable, exec.Command(`hermes`, ...) handles it. **Note:** exec fallback is DISABLED by default (`--no-exec-fallback` defaults to `true` for safety); pass `--no-exec-fallback=false` to re-enable it.
@@ -29,7 +29,7 @@ This guide takes you from zero to a running scheduler with your existing cron jo
 
 ### 1. Prerequisites
 
-- **Go 1.23+** — `go version`
+- **Go 1.26+** — `go version`
 - **Hermes gateway** running with API server enabled — `curl http://127.0.0.1:8642/health`
 - **SQLite3** — `sqlite3 --version`
 - **Existing cron jobs** in Hermes (the scheduler imports from `~/.hermes/cron/jobs.json`)
@@ -135,11 +135,16 @@ For production fleets, run the scheduler on a dedicated Hermes gateway instance 
 
 ### What's Happening
 
-Every 60 seconds the scheduler:
+The scheduler evaluates on demand — at startup, when a slot frees up, or via
+manual `POST /api/v1/evaluate` (event-driven; 30s minimum interval). On each
+evaluation it:
 1. Computes urgency for each project (based on priority + time since last run)
 2. Packs the most urgent projects into a weight budget (default 100)
 3. Spawns foreman ticks via the Hermes gateway API
 4. Records outcomes (queued → running → completed/failed)
+
+A 5-minute eval-stall watchdog forces re-evaluation when the fleet sits idle,
+so cooldown-expired projects don't go unscheduled (GAP-042).
 
 You can monitor, pause, or adjust any project through the dashboard, REST API, or MCP tools.
 
@@ -157,10 +162,10 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │              SCHEDULER (Go binary)            │
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
-│  /api/v1/  → REST API (15 endpoints)          │
+│  /api/v1/  → REST API (16 routes)             │
 │  /mcp      → MCP server (14 tools)            │
 │                                               │
-│  Eval Loop (60s):                             │
+│  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
 │                                               │
 │  SQLite: projects, ticks, events              │
@@ -173,18 +178,22 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/` | Fleet dashboard (HTML) |
-| GET | `/api/v1/health` | Health check |
-| GET | `/api/v1/status` | Fleet status and budget |
-| GET | `/api/v1/projects` | List all projects |
-| GET | `/api/v1/projects/:name` | Get project details |
-| PUT | `/api/v1/projects/:name` | Update project config |
-| POST | `/api/v1/projects/:name/pause` | Pause a project |
-| POST | `/api/v1/projects/:name/resume` | Resume a project |
-| GET | `/api/v1/ticks` | List recent ticks |
-| GET | `/api/v1/ticks/:id` | Get tick details |
-| GET | `/api/v1/events` | List event log |
-| POST | `/api/v1/evaluate` | Force evaluation cycle |
+| GET | `/` | Fleet dashboard (full HTML page) |
+| GET | `/dashboard/partial` | htmx partial: project table refresh |
+| GET | `/projects/{name}` | Per-project detail page |
+| GET | `/queue` | Global queue view |
+| GET | `/ticks?page=N` | Paginated tick history |
+| GET | `/namespaces/{id}` | Namespace drill-down |
+| GET | `/health` | Dashboard health panel |
+| GET | `/api/v1/health` | Machine health check (JSON) |
+| GET | `/api/v1/status` | Fleet status summary (JSON) |
+| GET/POST | `/api/v1/projects` | List/manage projects |
+| GET/POST | `/api/v1/namespaces` | List/create namespaces |
+| GET | `/api/v1/ticks` | List ticks |
+| GET | `/api/v1/events` | List event log (SSE streaming supported) |
+| POST | `/api/v1/evaluate` | Trigger re-evaluation |
+| POST | `/api/v1/pause` | Pause scheduling |
+| POST | `/api/v1/resume` | Resume scheduling |
 | POST | `/mcp` | MCP JSON-RPC endpoint |
 
 ---
@@ -440,7 +449,7 @@ MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler
 
 ## Dashboard
 
-Live HTML dashboard at `http://127.0.0.1:9090/` — auto-refreshes every 60 seconds.
+Live HTML dashboard at `http://127.0.0.1:9090/` — htmx-powered live updates: fleet overview and health panel every 10s, queue and tick history every 30s.
 
 ![Dashboard](assets/dashboard.png)
 
