@@ -215,6 +215,18 @@ func tickOutcomeOf(t *testing.T, db *sql.DB, tickID string) sql.NullString {
 	return outcome
 }
 
+// tickCompletedAtOf returns the raw completed_at column for a tick (NULL
+// when unset). GAP-045: reaped timeout rows must carry a non-NULL
+// completed_at so they are terminal for duration / failure-window math.
+func tickCompletedAtOf(t *testing.T, db *sql.DB, tickID string) sql.NullString {
+	t.Helper()
+	var completedAt sql.NullString
+	if err := db.QueryRow(`SELECT completed_at FROM ticks WHERE id = ?`, tickID).Scan(&completedAt); err != nil {
+		t.Fatalf("query tick completed_at %s: %v", tickID, err)
+	}
+	return completedAt
+}
+
 // TestReapZombies_DeadPidReaped — a running tick whose pid no longer exists
 // in /proc must be reaped by the 60s zombie reaper: status='timeout' and
 // outcome left NULL. Regression for REC-ZOMBIE-OUTCOME: the old code set
@@ -234,6 +246,12 @@ func TestReapZombies_DeadPidReaped(t *testing.T) {
 	}
 	if outcome := tickOutcomeOf(t, db, "zombie-tick-1"); outcome.Valid {
 		t.Errorf("dead-pid tick outcome = %q, want NULL (CHECK constraint rejects 'zombie_reaped')", outcome.String)
+	}
+	// GAP-045: the dead-pid reap path must stamp completed_at like the
+	// failed/completed paths — a timeout row without it reads as in-flight
+	// forever in duration / failure-window / p99-latency queries.
+	if completedAt := tickCompletedAtOf(t, db, "zombie-tick-1"); !completedAt.Valid || completedAt.String == "" {
+		t.Errorf("dead-pid tick completed_at = %v, want stamped (GAP-045)", completedAt)
 	}
 }
 

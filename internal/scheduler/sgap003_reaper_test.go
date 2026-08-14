@@ -54,7 +54,8 @@ func gatewayStaleMatrix(t *testing.T, db *sql.DB, project string) (staleHb, fres
 }
 
 // assertGatewayMatrix asserts the reaper outcome shared by both reapers:
-// stale rows reaped as timeout with outcome left NULL, fresh rows untouched.
+// stale rows reaped as timeout with outcome left NULL and completed_at
+// stamped (GAP-045), fresh rows untouched.
 func assertGatewayMatrix(t *testing.T, db *sql.DB, staleHb, freshHb, nullHbOldSpawn, nullHbFreshSpawn string) {
 	t.Helper()
 	if got := tickStatusOf(t, db, staleHb); got != "timeout" {
@@ -62,6 +63,9 @@ func assertGatewayMatrix(t *testing.T, db *sql.DB, staleHb, freshHb, nullHbOldSp
 	}
 	if outcome := tickOutcomeOf(t, db, staleHb); outcome.Valid {
 		t.Errorf("reaped tick %s outcome = %q, want NULL (CHECK constraint rejects 'zombie_reaped')", staleHb, outcome.String)
+	}
+	if got := tickCompletedAtOf(t, db, staleHb); !got.Valid || got.String == "" {
+		t.Errorf("reaped tick %s completed_at = %v, want stamped (GAP-045: timeout rows must be terminal)", staleHb, got)
 	}
 	if got := tickStatusOf(t, db, freshHb); got != "running" {
 		t.Errorf("fresh-heartbeat gateway tick = %q, want running — younger than 15 min must never be reaped (INFRA-012)", got)
@@ -71,6 +75,9 @@ func assertGatewayMatrix(t *testing.T, db *sql.DB, staleHb, freshHb, nullHbOldSp
 	}
 	if outcome := tickOutcomeOf(t, db, nullHbOldSpawn); outcome.Valid {
 		t.Errorf("reaped tick %s outcome = %q, want NULL", nullHbOldSpawn, outcome.String)
+	}
+	if got := tickCompletedAtOf(t, db, nullHbOldSpawn); !got.Valid || got.String == "" {
+		t.Errorf("reaped tick %s completed_at = %v, want stamped (GAP-045)", nullHbOldSpawn, got)
 	}
 	if got := tickStatusOf(t, db, nullHbFreshSpawn); got != "running" {
 		t.Errorf("NULL-heartbeat fresh-spawn gateway tick = %q, want running — INFRA-012 no-regression", got)

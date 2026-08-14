@@ -250,6 +250,14 @@ func (l *Loop) staleGatewayTicks(ctx context.Context) []staleGatewayTick {
 	return out
 }
 
+// timeoutReapSQL marks a running tick as timed out. GAP-045: completed_at is
+// stamped exactly like the failed/completed paths (lifecycle.Complete,
+// CleanupStale) so a timeout row is terminal for duration / failure-window /
+// p99-latency math instead of reading as in-flight forever. outcome stays
+// unset — the CHECK constraint only allows ('committed','dry_run','failed',
+// 'timeout'); 'zombie_reaped' violates it (see cleanDanglingOnStartup).
+const timeoutReapSQL = `UPDATE ticks SET status='timeout', completed_at=? WHERE id=?`
+
 // cleanDanglingOnStartup reaps ticks whose recorded pid no longer exists
 // (exec-fallback children die with the daemon), plus pid=0 gateway rows whose
 // heartbeat is stale (S-GAP-003): the heartbeat goroutine dies with the
@@ -332,9 +340,10 @@ func (l *Loop) cleanDanglingOnStartup() {
 		// violates it. BOTH cleanup paths (cleanDanglingOnStartup and
 		// reapZombies) must be outcome-free for the same reason — an
 		// UPDATE that sets outcome='zombie_reaped' is rejected by SQLite
-		// and the tick silently stays 'running' forever.
+		// and the tick silently stays 'running' forever. completed_at IS
+		// stamped (GAP-045) so reaped rows are terminal for duration math.
 		if _, err := l.db.ExecContext(ctx,
-			`UPDATE ticks SET status='timeout' WHERE id=?`, dt.id); err != nil {
+			timeoutReapSQL, time.Now().Format(time.RFC3339), dt.id); err != nil {
 			log.Printf("DANGLING: reaping tick %s (pid=%d): %v", dt.id, dt.pid, err)
 			continue
 		}
@@ -375,8 +384,9 @@ func (l *Loop) reapZombies() {
 		// outcome stays unset — see the CHECK-constraint comment in
 		// cleanDanglingOnStartup above; setting outcome here makes
 		// SQLite reject the UPDATE and the zombie is never reaped.
+		// completed_at IS stamped (GAP-045) — see timeoutReapSQL.
 		if _, err := l.db.ExecContext(ctx,
-			`UPDATE ticks SET status='timeout' WHERE id=?`, id); err != nil {
+			timeoutReapSQL, time.Now().Format(time.RFC3339), id); err != nil {
 			log.Printf("ZOMBIE: reaping tick %s: %v", id, err)
 			continue
 		}
@@ -394,7 +404,7 @@ func (l *Loop) reapZombies() {
 	var gwReaped int
 	for _, gt := range l.staleGatewayTicks(ctx) {
 		if _, err := l.db.ExecContext(ctx,
-			`UPDATE ticks SET status='timeout' WHERE id=?`, gt.id); err != nil {
+			timeoutReapSQL, time.Now().Format(time.RFC3339), gt.id); err != nil {
 			log.Printf("ZOMBIE: reaping gateway tick %s: %v", gt.id, err)
 			continue
 		}
