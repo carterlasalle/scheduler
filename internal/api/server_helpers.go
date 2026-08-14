@@ -60,6 +60,13 @@ type ProjectFailureRate struct {
 	Failed      int     `json:"failed"`
 	Total       int     `json:"total"`
 	FailureRate float64 `json:"failure_rate"`
+
+	// AutoDisableArmed reports whether this project currently meets the
+	// auto-disable condition (GAP-047): the feature is enabled
+	// (threshold > 0), the sample size reaches minTicks, and the failure
+	// rate is at or above the threshold. It mirrors the exact condition in
+	// internal/scheduler/alert_escalation.go CheckFailureRateAutoDisable.
+	AutoDisableArmed bool `json:"auto_disable_armed"`
 }
 
 // computeProjectFailureRates returns a per-project failure-rate breakdown
@@ -69,9 +76,18 @@ type ProjectFailureRate struct {
 // "total" is the number of ticks in the window with a non-null completed_at
 // (running/queued ticks are excluded). failure_rate = failed/total, rounded
 // to 4 decimal places.
-func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int) map[string]ProjectFailureRate {
+//
+// `threshold` and `minTicks` drive the AutoDisableArmed flag (GAP-047) and
+// mirror the auto-disable policy in alert_escalation.go: armed when
+// threshold > 0 && total >= minTicks && rate >= threshold, where rate is the
+// unrounded failed/total ratio (matching CheckFailureRateAutoDisable exactly).
+func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, threshold float64, minTicks int) map[string]ProjectFailureRate {
 	if window <= 0 {
 		window = 100
+	}
+	// Mirror CheckFailureRateAutoDisable's effective sample-size default.
+	if minTicks <= 0 {
+		minTicks = 50
 	}
 	out := map[string]ProjectFailureRate{}
 
@@ -120,12 +136,17 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int) map
 			continue
 		}
 		rate := float64(failed) / float64(total)
+		// GAP-047: armed uses the unrounded rate, exactly like
+		// CheckFailureRateAutoDisable (which compares the raw ratio against
+		// the threshold before any display rounding).
+		armed := threshold > 0 && total >= minTicks && rate >= threshold
 		// Round to 4 decimal places for clean JSON output.
 		rate = float64(int(rate*10000)) / 10000
 		out[name] = ProjectFailureRate{
-			Failed:      failed,
-			Total:       total,
-			FailureRate: rate,
+			Failed:           failed,
+			Total:            total,
+			FailureRate:      rate,
+			AutoDisableArmed: armed,
 		}
 	}
 	return out

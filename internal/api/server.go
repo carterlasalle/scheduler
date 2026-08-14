@@ -127,9 +127,14 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	// GAP-047: auto-disable policy comes from the startup resolved-config
+	// snapshot. A Server built without SetResolvedConfig (tests) carries the
+	// zero value → threshold == 0 → feature off, no panic.
+	adThreshold := s.resolvedConfig.AutoDisableFailureRate
+	adMinTicks := s.resolvedConfig.AutoDisableMinTicks
 	activeTicks := countActiveTicks(ctx, s.db)
 	recentOutcomes := countRecentOutcomes(ctx, s.db)
-	failureRates := computeProjectFailureRates(ctx, s.db, s.failureWindow)
+	failureRates := computeProjectFailureRates(ctx, s.db, s.failureWindow, adThreshold, adMinTicks)
 	lastEval := getLastEvalTime(ctx, s.db)
 	status := map[string]interface{}{
 		"budget_total":           100,
@@ -139,6 +144,14 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"projects_failure_rates": failureRates,
 		"failure_window":         s.failureWindow,
 		"last_evaluation":        lastEval,
+		// GAP-047: auto-disable configuration driving the per-project
+		// auto_disable_armed flags in projects_failure_rates.
+		"auto_disable": map[string]interface{}{
+			"enabled":   adThreshold > 0,
+			"threshold": adThreshold,
+			"window":    s.failureWindow,
+			"min_ticks": adMinTicks,
+		},
 	}
 	// GAP-043: zero-select diagnostics — consecutive zero-select evals with
 	// eligible projects present, and the eligible count at the last one.
