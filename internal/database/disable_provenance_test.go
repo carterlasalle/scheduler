@@ -226,3 +226,124 @@ func TestMigration12_AddsProvenanceColumns(t *testing.T) {
 		}
 	}
 }
+
+// applyMigrationsUpTo runs the migrations slice through version upto and
+// records them in the migrations table — the pre-upgrade state an existing
+// install has before Migrate applies the rest.
+func applyMigrationsUpTo(t *testing.T, db *sql.DB, upto int) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS migrations (
+    version    INTEGER PRIMARY KEY,
+    desc       TEXT NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);`); err != nil {
+		t.Fatalf("create migrations table: %v", err)
+	}
+	for _, m := range migrations {
+		if m.version > upto {
+			break
+		}
+		if _, err := db.ExecContext(ctx, m.stmt); err != nil {
+			// Mirror Migrate()'s tolerance: SQLite ALTER TABLE ADD COLUMN
+			// is not idempotent and the initial CREATE TABLE already
+			// carries columns later migrations re-add (worker_model etc.).
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				t.Fatalf("apply migration %d (%s): %v", m.version, m.desc, err)
+			}
+		}
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO migrations (version, desc) VALUES (?, ?)`, m.version, m.desc); err != nil {
+			t.Fatalf("record migration %d: %v", m.version, err)
+		}
+	}
+}
+
+// TestMigration13_BackfillsLegacyDisableProvenance (DOGFOOD-010) simulates a
+// v12 install whose pre-GAP-044 disabled rows carry empty provenance, then
+// runs Migrate and verifies the backfill: legacy rows get
+// disabled_by='legacy' / disabled_reason='pre-GAP-044 disable' / a
+// disabled_at, rows that already have provenance are untouched, and the
+// migration is idempotent.
+func TestMigration13_BackfillsLegacyDisableProvenance(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// Pre-upgrade state: schema at v12.
+	applyMigrationsUpTo(t, db, 12)
+
+	// A legacy disabled row (disabled before GAP-044 — empty provenance).
+	if err := CreateProject(ctx, db, sampleProject("legacy-a")); err != nil {
+		t.Fatalf("create legacy-a: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE projects SET enabled = 0, disabled_by = '', disabled_reason = '', disabled_at = NULL WHERE name = 'legacy-a'`); err != nil {
+		t.Fatalf("legacy disable legacy-a: %v", err)
+	}
+	// A row that already carries provenance — must NOT be touched.
+	if err := CreateProject(ctx, db, sampleProject("stamped-a")); err != nil {
+		t.Fatalf("create stamped-a: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE projects SET enabled = 0, disabled_by = 'api-pause', disabled_reason = 'paused earlier', disabled_at = '2026-08-14T00:00:00Z' WHERE name = 'stamped-a'`); err != nil {
+		t.Fatalf("disable stamped-a: %v", err)
+	}
+	// An enabled row — must NOT be touched.
+	if err := CreateProject(ctx, db, sampleProject("enabled-a")); err != nil {
+		t.Fatalf("create enabled-a: %v", err)
+	}
+
+	// Upgrade: Migrate applies v13 only.
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("Migrate (v13): %v", err)
+	}
+	v, err := MigrationVersion(ctx, db)
+	if err != nil {
+		t.Fatalf("MigrationVersion: %v", err)
+	}
+	if v != 13 {
+		t.Fatalf("migration version = %d, want 13", v)
+	}
+
+	legacy, err := GetProject(ctx, db, "legacy-a")
+	if err != nil {
+		t.Fatalf("get legacy-a: %v", err)
+	}
+	if legacy.DisabledBy != "legacy" {
+		t.Errorf("legacy-a DisabledBy = %q, want \"legacy\"", legacy.DisabledBy)
+	}
+	if legacy.DisabledReason != "pre-GAP-044 disable" {
+		t.Errorf("legacy-a DisabledReason = %q, want \"pre-GAP-044 disable\"", legacy.DisabledReason)
+	}
+	if legacy.DisabledAt == "" {
+		t.Error("legacy-a DisabledAt empty — backfill must stamp it")
+	}
+
+	stamped, err := GetProject(ctx, db, "stamped-a")
+	if err != nil {
+		t.Fatalf("get stamped-a: %v", err)
+	}
+	if stamped.DisabledBy != "api-pause" || stamped.DisabledReason != "paused earlier" || stamped.DisabledAt != "2026-08-14T00:00:00Z" {
+		t.Errorf("stamped-a provenance overwritten: by=%q reason=%q at=%q",
+			stamped.DisabledBy, stamped.DisabledReason, stamped.DisabledAt)
+	}
+
+	enabled, err := GetProject(ctx, db, "enabled-a")
+	if err != nil {
+		t.Fatalf("get enabled-a: %v", err)
+	}
+	if !enabled.Enabled {
+		t.Error("enabled-a was disabled by the backfill")
+	}
+
+	// Idempotency: a second Migrate is a no-op (version guard) and the
+	// statement itself only matches empty-provenance rows anyway.
+	if err := Migrate(ctx, db); err != nil {
+		t.Fatalf("second Migrate: %v", err)
+	}
+}
