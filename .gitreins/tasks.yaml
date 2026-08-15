@@ -1120,3 +1120,20 @@ tasks:
   status: complete
   created_at: '2026-08-15T02:43:35.217090+00:00'
   completed_at: '2026-08-15T02:49:07.194412+00:00'
+- id: DOGFOOD-007
+  title: Simulation mode actually simulates; sim tick IDs unique
+  criteria:
+  - '--sim-count 5 against a seeded DB exits 0 and inserts 5 unique tick rows (no
+    UNIQUE constraint failed: ticks.id crash; RunBulkSim tick IDs unique across same-second
+    wraps)'
+  - --simulate daemon mode with no gateway credentials boots and evaluate() spawns
+    ticks with sim- prefix via the sim spawner, never the real spawner (no 'no gateway
+    client and exec fallback disabled' failures)
+  - go test -count=1 -short -p 1 ./... passes 9/9 packages incl. new sim_mode tests
+    (TestSimTickID_UniqueWithinSameSecond, TestRunBulkSim_UniqueTickIDs, TestEvaluate_SimulateModeSpawnsSimulatedTicks)
+  - README.md and AGENTS.md document sim fixture count as 13 (12 enabled + 1 disabled
+    ghost), not 14
+  - go build ./... and go vet ./... clean
+  status: complete
+  created_at: '2026-08-15T16:34:45.655352+00:00'
+  completed_at: '2026-08-15T16:34:59.544403+00:00'
