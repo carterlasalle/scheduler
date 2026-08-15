@@ -1086,3 +1086,28 @@ tasks:
   status: complete
   created_at: '2026-08-14T18:52:13.784213+00:00'
   completed_at: '2026-08-14T18:53:25.528239+00:00'
+- id: GAP-048
+  title: 'Daemon stuck in exec-fallback permanently when gateway down at startup:
+    reconnector never re-engages HTTP + --no-exec-fallback ignored at startup'
+  criteria:
+  - "cmd/schedulerd/reconnector.go exists and runGatewayReconnector pings the gateway\
+    \ every reconnectInterval (60s) regardless of gwConnected state \u2014 a fallback-start\
+    \ daemon re-pings and calls onConnect (SetGatewayClient) on success"
+  - 'cmd/schedulerd/main.go startup fallback honors --no-exec-fallback: when gwConnected==false
+    after 10 retries and noExecFallback==true, the daemon logs a HIGH event via loop.EmitHighEvent
+    (component gateway) and does NOT fall back to exec; with noExecFallback==false
+    the exec fallback still occurs'
+  - 'internal/scheduler/spawn.go guards the nil-gateway path: Spawn() with s.gateway==nil
+    && s.noExecFallback returns an error + HIGH event instead of exec-spawning (no
+    exec.Command invocation)'
+  - 'cmd/schedulerd/reconnector_test.go and internal/scheduler/gap048_spawn_test.go
+    contain tests covering: fallback-start reconnects when gateway returns; already-connected
+    stays connected; gateway drops reconnects with backoff; all-retries-fail stays
+    disconnected; nil-gateway+noExecFallback drops tick; nil-gateway+execFallbackAllowed
+    still exec-spawns; nil-gateway emits HIGH event'
+  - go build ./... passes; go vet ./internal/scheduler/ ./cmd/schedulerd/ passes;
+    gofmt -l cmd/schedulerd/ internal/scheduler/ prints nothing; go test -count=1
+    -short -p 1 ./... all 9 packages pass
+  status: complete
+  created_at: '2026-08-15T02:02:01.109471+00:00'
+  completed_at: '2026-08-15T02:02:08.072192+00:00'
