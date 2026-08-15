@@ -418,7 +418,7 @@ created disabled — resume them explicitly.
 | `/api/v1/health` | GET | Daemon health, uptime, active ticks |
 | `/api/v1/status` | GET | Full fleet status (projects, budget, namespaces) |
 | `/api/v1/projects` | GET/POST | List all or register a new project |
-| `/api/v1/projects/{name}` | GET/PUT/DELETE | Read, update, or remove a project |
+| `/api/v1/projects/{name}` | GET/PUT/DELETE | Read, update, soft-delete (`?confirm=true`) or purge (`?confirm=true&purge=true`) a project |
 | `/api/v1/ticks` | GET | Tick history with filtering |
 | `/api/v1/ticks/{id}` | GET | Single tick detail |
 | `/api/v1/events` | GET/STREAM | Event log (SSE streaming supported) |
@@ -427,6 +427,23 @@ created disabled — resume them explicitly.
 | `/api/v1/resume` | POST | Resume scheduling |
 | `/api/v1/namespaces` | GET/POST | List or create namespaces |
 | `/api/v1/namespaces/{id}` | GET/PUT/DELETE | Read, update, or remove a namespace |
+
+**DELETE `/api/v1/projects/{name}` semantics (DOGFOOD-009):** `DELETE` is a
+soft delete — it requires `?confirm=true` (else `400`) and refuses enabled
+projects with `409` (pause first). On success it returns `200
+{"status":"deleted","project":name}`: the row is RETAINED (still listed by
+`GET /api/v1/projects` and `GET /projects/{name}`), stamped `enabled=false`,
+`disabled_by='api-delete'`, `disabled_reason='soft-deleted via DELETE
+?confirm=true'`, `disabled_at=<now>`. Soft-deleted rows keep their historical
+ticks referentially valid and remain visible in listings. To permanently
+remove the row instead, add `?purge=true` (i.e.
+`DELETE /api/v1/projects/{name}?confirm=true&purge=true`) — purge has its own
+confirm requirement (`?purge=true` alone is refused with `400`), still refuses
+enabled projects with `409`, and on success returns `200
+{"status":"purged","project":name}` with the row permanently removed from the
+projects table. Historical ticks are retained (they reference projects by
+name string) but no longer contribute to `/api/v1/status`
+`projects_failure_rates`, which only includes existing projects.
 
 ## MCP Server
 

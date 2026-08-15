@@ -132,7 +132,7 @@ The daemon's default DB path is `~/.hermes/coding-hermes/scheduler.db` (`--db` f
   sqlite3 ~/.hermes/coding-hermes/scheduler.db "DELETE FROM projects WHERE name='<name>';"
   ```
 
-  This can orphan historical ticks — do not use it for normal cleanup.
+  Prefer the API (`DELETE /api/v1/projects/{name}?confirm=true&purge=true`, DOGFOOD-009) when the daemon is up — it applies the same guards as soft delete (400 without confirm, 409 while enabled) and, unlike this SQL fallback, keeps foreign-key enforcement intact on the daemon connection. Both paths retain historical ticks (referenced by name string); `/api/v1/status` failure rates only include existing projects, so purged rows never resurface as ghosts.
 
 ## Key Design Decisions
 

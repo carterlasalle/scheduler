@@ -463,6 +463,37 @@ func DeleteProject(ctx context.Context, db *sql.DB, name string) error {
 	return nil
 }
 
+// PurgeProject permanently removes a project row from the projects table
+// (hard delete — DOGFOOD-009). Historical ticks are retained: they reference
+// projects by name string, and the failure-rate breakdown in /api/v1/status
+// filters to existing projects, so a purged project's ticks never resurface
+// as ghosts.
+//
+// The ticks.project_name foreign key (NO ACTION) would normally block the
+// DELETE while historical ticks exist. Purge therefore disables FK
+// enforcement for the duration of the DELETE on the single shared
+// connection (SetMaxOpenConns(1) makes this race-free) and restores it via
+// defer — the same semantics as the documented manual hard-delete SQL.
+func PurgeProject(ctx context.Context, db *sql.DB, name string) error {
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("purge project %q: disable foreign keys: %w", name, err)
+	}
+	defer func() { _, _ = db.ExecContext(ctx, `PRAGMA foreign_keys=ON`) }()
+
+	res, err := db.ExecContext(ctx, `DELETE FROM projects WHERE name = ?`, name)
+	if err != nil {
+		return fmt.Errorf("purge project %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("purge project %q: rows affected: %w", name, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: %s", ErrProjectNotFound, name)
+	}
+	return nil
+}
+
 // boolToInt converts a bool to SQLite's INTEGER representation.
 func boolToInt(b bool) int {
 	if b {

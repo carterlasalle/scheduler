@@ -96,8 +96,16 @@ func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, thr
 	// with LIMIT inside a window function would be cleaner, but SQLite's
 	// LIMIT inside a subquery is well-supported and avoids the row_number()
 	// complexity. We do it in Go for clarity and to keep the query portable.
+	//
+	// DOGFOOD-009: only EXISTING projects are considered. A hard-deleted
+	// project (row purged from the projects table, e.g. eduos-e2e) leaves
+	// historical ticks behind; without the join those ticks resurfaced as
+	// ghost failure-rate entries (failure_rate=1.0, auto_disable_armed=true)
+	// that could never be cleared.
 	projects, err := db.QueryContext(ctx,
-		`SELECT DISTINCT project_name FROM ticks WHERE completed_at IS NOT NULL`)
+		`SELECT DISTINCT t.project_name FROM ticks t
+		 JOIN projects p ON p.name = t.project_name
+		 WHERE t.completed_at IS NOT NULL`)
 	if err != nil {
 		return out
 	}
@@ -380,14 +388,15 @@ var openapiSpec = []byte(`{
         }
       },
       "delete": {
-        "summary": "Soft-delete a project (sets enabled=false; requires ?confirm=true; refuses enabled projects)",
+        "summary": "Delete a project. confirm=true soft-deletes (enabled=false, row retained); confirm=true&purge=true permanently removes the row (DOGFOOD-009)",
         "parameters": [
           {"name": "name", "in": "path", "required": true, "schema": {"type": "string"}},
-          {"name": "confirm", "in": "query", "required": true, "schema": {"type": "string"}}
+          {"name": "confirm", "in": "query", "required": true, "schema": {"type": "string"}},
+          {"name": "purge", "in": "query", "required": false, "schema": {"type": "string"}, "description": "true = hard-delete the row permanently; requires confirm=true too; historical ticks are retained"}
         ],
         "responses": {
-          "200": {"description": "Project soft-deleted (enabled=false)"},
-          "400": {"description": "Missing confirm=true query param"},
+          "200": {"description": "Project soft-deleted (enabled=false) or purged (row removed)"},
+          "400": {"description": "Missing confirm=true query param (or purge=true without confirm)"},
           "404": {"description": "Project not found"},
           "409": {"description": "Project is enabled — pause it first"}
         }

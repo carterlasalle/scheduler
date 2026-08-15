@@ -498,3 +498,116 @@ func TestConformance_DeleteProject_NotFound(t *testing.T) {
 		t.Errorf("error = %q, want project not found", msg)
 	}
 }
+
+// --- purge (hard delete, DOGFOOD-009) ---
+
+// TestConformance_DeleteProject_PurgeWithoutConfirm verifies that purge has
+// its OWN confirm requirement: ?purge=true without confirm=true is refused
+// with 400 and the row is left untouched.
+func TestConformance_DeleteProject_PurgeWithoutConfirm(t *testing.T) {
+	a := newAPITestServer(t)
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "purgedummy",
+		"repo_url": "https://example.com/purgedummy",
+		"workdir":  "/tmp/purgedummy",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201: %v", status, resp)
+	}
+
+	status, resp = a.do(t, "DELETE", "/api/v1/projects/purgedummy?purge=true", nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (purge without confirm): %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	if !strings.Contains(msg, "confirm=true") {
+		t.Errorf("error = %q, want mention of confirm=true", msg)
+	}
+	// Row still present.
+	if _, err := database.GetProject(context.Background(), a.db, "purgedummy"); err != nil {
+		t.Errorf("GetProject after refused purge: %v", err)
+	}
+}
+
+// TestConformance_DeleteProject_PurgeSuccess verifies confirm=true&purge=true
+// hard-deletes: 200 with status=purged, the row disappears from
+// GET /api/v1/projects AND from the database, while historical ticks stay.
+func TestConformance_DeleteProject_PurgeSuccess(t *testing.T) {
+	a := newAPITestServer(t)
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "purgevictim",
+		"repo_url": "https://example.com/purgevictim",
+		"workdir":  "/tmp/purgevictim",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201: %v", status, resp)
+	}
+	// Historical tick for the doomed project.
+	tickID := database.NextTickID("purgevictim")
+	if err := database.CreateTick(context.Background(), a.db, &database.Tick{
+		ID:          tickID,
+		ProjectName: "purgevictim",
+		Status:      database.StatusCompleted,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("CreateTick: %v", err)
+	}
+
+	status, resp = a.do(t, "DELETE", "/api/v1/projects/purgevictim?confirm=true&purge=true", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %v", status, resp)
+	}
+	if resp["status"] != "purged" {
+		t.Errorf("status field = %v, want purged", resp["status"])
+	}
+
+	// Gone from the API list.
+	status, body := a.do(t, "GET", "/api/v1/projects", nil)
+	if status != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", status)
+	}
+	for _, p := range body["projects"].([]interface{}) {
+		if p.(map[string]interface{})["name"] == "purgevictim" {
+			t.Error("purged project still listed in GET /api/v1/projects")
+		}
+	}
+	// Gone from the DB.
+	if _, err := database.GetProject(context.Background(), a.db, "purgevictim"); err == nil {
+		t.Error("purged project still present in DB")
+	}
+	// Historical tick retained.
+	got, err := database.GetTick(context.Background(), a.db, tickID)
+	if err != nil || got == nil {
+		t.Errorf("historical tick lost after purge: %v", err)
+	}
+}
+
+// TestConformance_DeleteProject_PurgeEnabledRefused verifies an enabled
+// project is refused with 409 even with confirm=true&purge=true.
+func TestConformance_DeleteProject_PurgeEnabledRefused(t *testing.T) {
+	a := newAPITestServer(t)
+	status, resp := a.do(t, "POST", "/api/v1/projects", map[string]interface{}{
+		"name":     "purgelive",
+		"repo_url": "https://example.com/purgelive",
+		"workdir":  "/tmp/purgelive",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201: %v", status, resp)
+	}
+	if status, resp = a.do(t, "POST", "/api/v1/projects/purgelive/resume", nil); status != http.StatusOK {
+		t.Fatalf("resume status = %d, want 200: %v", status, resp)
+	}
+
+	status, resp = a.do(t, "DELETE", "/api/v1/projects/purgelive?confirm=true&purge=true", nil)
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %v", status, resp)
+	}
+	// Still enabled and present.
+	got, err := database.GetProject(context.Background(), a.db, "purgelive")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if !got.Enabled {
+		t.Error("project disabled by refused purge")
+	}
+}

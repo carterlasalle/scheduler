@@ -285,6 +285,56 @@ func TestDeleteProject_SoftDelete(t *testing.T) {
 	}
 }
 
+func TestPurgeProject_HardDelete(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	if err := CreateProject(ctx, db, sampleProject("alpha")); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	// A historical tick referencing the project (ticks.project_name is a FK
+	// with NO ACTION — purge must not be blocked by it, and the tick must
+	// survive the purge).
+	if err := CreateTick(ctx, db, sampleTick("alpha")); err != nil {
+		t.Fatalf("CreateTick: %v", err)
+	}
+
+	if err := PurgeProject(ctx, db, "alpha"); err != nil {
+		t.Fatalf("PurgeProject: %v", err)
+	}
+
+	// Row is gone from the projects table.
+	if _, err := GetProject(ctx, db, "alpha"); !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("GetProject after purge = %v, want ErrProjectNotFound", err)
+	}
+	// Historical tick retained (referenced by name string only).
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM ticks WHERE project_name = 'alpha'`).Scan(&n); err != nil {
+		t.Fatalf("count ticks: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("ticks for purged project = %d, want 1 (historical ticks must be retained)", n)
+	}
+	// FK enforcement restored: a new project can be created and a bogus
+	// orphan tick insert is still refused.
+	if err := CreateProject(ctx, db, sampleProject("beta")); err != nil {
+		t.Fatalf("CreateProject after purge: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO ticks (id, project_name, status, created_at) VALUES ('orphan', 'nope', 'queued', '2026-08-15T00:00:00Z')`); err == nil {
+		t.Error("orphan tick insert succeeded — foreign keys not restored after purge")
+	}
+}
+
+func TestPurgeProject_NotFound(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	err := PurgeProject(ctx, db, "nope")
+	if !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("PurgeProject(nope) = %v, want ErrProjectNotFound", err)
+	}
+}
+
 func TestCreateProject_CheckConstraintWeight(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()

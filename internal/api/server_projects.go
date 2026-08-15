@@ -235,15 +235,22 @@ func (s *Server) resumeProject(w http.ResponseWriter, r *http.Request, name stri
 	writeJSON(w, 200, map[string]string{"status": "resumed", "project": name})
 }
 
-// deleteProject soft-deletes a project (sets enabled=false; the row is
-// retained so historical ticks stay referentially valid). It requires an
-// explicit confirm=true query param and refuses enabled projects so a live
-// fleet project can never be silently disabled by a stray DELETE.
+// deleteProject removes a project. With only confirm=true it soft-deletes
+// (sets enabled=false; the row is retained so historical ticks stay
+// referentially valid). With confirm=true&purge=true it hard-deletes the row
+// permanently (DOGFOOD-009) — historical ticks keep their project_name and
+// /api/v1/status failure rates exclude projects whose row no longer exists.
+// It requires an explicit confirm=true query param and refuses enabled
+// projects so a live fleet project can never be silently disabled or
+// removed by a stray DELETE.
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request, name string) {
+	q := r.URL.Query()
+	purge := q.Get("purge") == "true"
 	// Confirm flag checked first: even a valid, enabled project must not be
-	// touched without explicit confirmation.
-	if r.URL.Query().Get("confirm") != "true" {
-		writeError(w, 400, "confirm=true query param required — this soft-deletes the project (enabled=false)")
+	// touched without explicit confirmation. Purge has its OWN confirm
+	// requirement — ?purge=true alone is refused just like a bare DELETE.
+	if q.Get("confirm") != "true" {
+		writeError(w, 400, "confirm=true query param required — this soft-deletes the project (enabled=false); add purge=true to permanently remove the row")
 		return
 	}
 	ctx := context.Background()
@@ -260,6 +267,22 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request, name stri
 	// it of ticks — require an explicit pause first.
 	if p.Enabled {
 		writeError(w, 409, "project is enabled — pause it first (PUT Enabled=false or POST /projects/{name}/pause) before deleting")
+		return
+	}
+	if purge {
+		if err := database.PurgeProject(ctx, s.db, name); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		// The row is gone, so a disable-provenance event makes no sense;
+		// log a purge audit entry instead.
+		_ = database.LogEvent(ctx, s.db, &database.Event{
+			Severity:  database.SeverityInfo,
+			Component: "api",
+			Message:   fmt.Sprintf("project purged (hard delete): %s", name),
+			Details:   `{"project":"` + name + `","action":"purge","via":"DELETE ?confirm=true&purge=true"}`,
+		})
+		writeJSON(w, 200, map[string]string{"status": "purged", "project": name})
 		return
 	}
 	if err := database.DeleteProject(ctx, s.db, name); err != nil {

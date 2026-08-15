@@ -138,3 +138,40 @@ func TestComputeProjectFailureRates_AutoDisableArmedAtThreshold(t *testing.T) {
 		t.Errorf("just-below: exact = %+v, want armed=false (0.5 < 0.5001)", rates["exact"])
 	}
 }
+
+// TestComputeProjectFailureRates_ExcludesHardDeletedProjects (DOGFOOD-009)
+// verifies the ghost-project class is dead: ticks whose project row no
+// longer exists (hard-deleted/purged, e.g. eduos-e2e) must NOT appear in
+// projects_failure_rates — previously they surfaced forever with
+// failure_rate=1.0 and auto_disable_armed=true.
+func TestComputeProjectFailureRates_ExcludesHardDeletedProjects(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	mustCreateHelperTestProject(t, db, "live")  // still exists → must appear
+	mustCreateHelperTestProject(t, db, "ghost") // will be purged → must NOT appear
+
+	now := time.Now()
+	insertHelperTestTick(t, db, "live-ok-1", "live", "completed", now.Add(-time.Minute))
+	for i := 0; i < 3; i++ {
+		insertHelperTestTick(t, db, "ghost-fail-"+string(rune('a'+i)), "ghost", "failed",
+			now.Add(-time.Duration(10-i)*time.Minute))
+	}
+
+	// Purge the ghost project row (same path the API purge uses).
+	if err := database.PurgeProject(ctx, db, "ghost"); err != nil {
+		t.Fatalf("PurgeProject ghost: %v", err)
+	}
+
+	rates := computeProjectFailureRates(ctx, db, 100, 0.5, 2)
+	if _, ok := rates["ghost"]; ok {
+		t.Errorf("ghost (purged project) still in failure rates: %+v", rates["ghost"])
+	}
+	if _, ok := rates["live"]; !ok {
+		t.Errorf("live project missing from failure rates: %+v", rates)
+	}
+}
