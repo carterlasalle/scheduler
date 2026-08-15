@@ -447,21 +447,11 @@ name string) but no longer contribute to `/api/v1/status`
 
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via:
-
-| Tool | Description |
-|------|-------------|
-| `list_projects` | List all projects with status, priority, weight |
-| `get_project` | Get a single project by name |
-| `enable_project` / `disable_project` | Toggle project on/off |
-| `set_priority` / `set_weight` | Adjust scheduling parameters |
-| `get_ticks` | Recent tick history for a project |
-| `pause_scheduler` / `resume_scheduler` | Pause/resume the eval loop |
-| `force_evaluate` | Trigger immediate evaluation |
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 14 `fleet_*` tools listed in [MCP Tools](#mcp-tools):
 
 ```json
 // Example: List all projects via MCP
-{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_projects","arguments":{}}}
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"fleet_projects","arguments":{}}}
 ```
 
 ## Dashboard
