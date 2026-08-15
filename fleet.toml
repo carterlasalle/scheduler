@@ -1,3 +1,90 @@
-# Fleet configuration — cooldown overrides
-# No projects configured yet. Add [[projects]] entries here (or via the
-# scheduler REST API) as real coding-hermes-managed projects are created.
+# Fleet configuration — declarative project and namespace definitions
+# Usage: schedulerd --config fleet.toml
+#
+# This file seeds the SQLite database with project and namespace definitions
+# at startup. Existing rows are preserved (idempotent; create-only, never
+# overwrites). Fields match the `projects` and `namespaces` tables in
+# scheduler.db.
+#
+# IMPORTANT (2026-08-12): ApplyFleetConfig upserts project config from this
+# file on EVERY daemon start. Before this file had entries, the daemon
+# defaulted cooldown to 900s and silently overwrote the 43200/86400 values
+# that foremen set via the API — the recurring "cooldown reversion" flag.
+# Cooldowns below are the authoritative idle values; change them HERE, not
+# via the API (API writes get reverted on daemon restart).
+
+# ── Projects ────────────────────────────────────────────────────────────
+
+[[projects]]
+name = "gitreins2"
+repo_url = "https://github.com/carterlasalle/gitreins.git"
+workdir = "/home/hermes/gitreins2"
+weight = 10
+priority = 5
+cooldown_s = 43200
+model = "deepseek/deepseek-v4-flash-0731"
+provider = "openrouter"
+deliver = "telegram:-5376783577"
+enabled = true
+
+[[projects]]
+name = "ozzgraph"
+repo_url = "https://github.com/carterlasalle/ozzgraph.git"
+workdir = "/home/hermes/ozzgraph"
+weight = 10
+priority = 5
+cooldown_s = 43200
+model = "deepseek/deepseek-v4-flash-0731"
+provider = "openrouter"
+deliver = "telegram:-5376783577"
+enabled = true
+
+[[projects]]
+name = "livecostdashboard"
+repo_url = "file:///home/hermes/livecostdashboard"
+workdir = "/home/hermes/livecostdashboard"
+weight = 10
+priority = 5
+cooldown_s = 43200
+model = "deepseek/deepseek-v4-flash-0731"
+provider = "openrouter"
+deliver = "telegram:-5376783577"
+enabled = true
+
+[[projects]]
+name = "sudobroker"
+repo_url = "https://github.com/carterlasalle/sudobroker.git"
+workdir = "/home/hermes/sudobroker"
+weight = 10
+priority = 5
+cooldown_s = 43200
+model = "deepseek/deepseek-v4-flash-0731"
+provider = "openrouter"
+deliver = "telegram:-5376783577"
+enabled = true
+
+[[projects]]
+name = "hermes-memory-duckbrain"
+repo_url = "https://github.com/carterlasalle/hermes-memory-skills.git"
+workdir = "/home/hermes/hermes-memory-skills-duckbrain"
+weight = 10
+priority = 5
+cooldown_s = 86400
+model = "deepseek/deepseek-v4-flash-0731"
+provider = "openrouter"
+deliver = "telegram:-5376783577"
+enabled = true
+
+# ── Namespaces ──────────────────────────────────────────────────────────
+
+[[projects]]
+name = "cachepilot"
+repo_url = "https://github.com/carterlasalle/cachepilot.git"
+workdir = "/home/hermes/cachepilot"
+weight = 10
+priority = 5
+cooldown_s = 900
+model = "deepseek/deepseek-v4-flash-0731"
+provider = "openrouter"
+deliver = "telegram:-5376783577"
+enabled = true

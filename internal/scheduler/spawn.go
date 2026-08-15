@@ -206,9 +206,10 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 
 		prompt := fmt.Sprintf(
 			"[Scheduler tick: %s] "+
-				"Load skills coding-hermes-board, coding-hermes-model-router, coding-hermes-never-done, coding-hermes-specs, coding-hermes-testing, coding-hermes-middle-out, systematic-debugging, trust-but-verify, reality-validation, github-pr-workflow, github-repo-management, claude-design, popular-web-designs, hilo, gitreins-usage. "+
+				"Load skills coding-hermes-board, coding-hermes-model-router, coding-hermes-never-done, coding-hermes-specs, coding-hermes-testing, coding-hermes-middle-out, systematic-debugging, trust-but-verify, reality-validation, github-pr-workflow, github-repo-management, claude-design, popular-web-designs, hilo, gitreins-usage, off-by-one-usage. "+
 				"Read .coding-hermes/tasks.md. Execute ONE foreman tick per the foreman skill. "+
 				"Workdir: %s. "+
+				"OFF-BY-ONE (pre-solve lab, localhost:8766): BEFORE debugging any error or designing a fix from scratch, discover a pre-verified answer via `curl -s -X POST http://localhost:8766/api/v1/problems/discover -H 'Content-Type: application/json' -d '{\"problem_class\":\"<class>\"}'` or grep the flat corpus data/answers/ (per the off-by-one-usage skill). If you had to debug something non-trivial, submit it (`cadence: post-debug`) so future ticks hit a cached answer. "+
 				"IMPORTANT — worker dispatch: You are the FOREMAN. You pick ONE board task, then dispatch a WORKER to implement it. "+
 				"Do NOT implement complex tasks yourself. To dispatch a worker, run a BACKGROUND process via your terminal tool: "+
 				"`hermes chat -q \"<task brief from the board, plus files-to-modify and acceptance criteria>\" -m <worker_model> --provider <worker_provider> -s coding-hermes-worker --ignore-rules -Q` "+
@@ -298,6 +299,7 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			"-s", "popular-web-designs",
 			"-s", "hilo",
 			"-s", "gitreins-usage",
+			"-s", "off-by-one-usage",
 			"--ignore-rules", "-Q",
 		}
 
