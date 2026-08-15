@@ -16,7 +16,18 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 
-echo "=== SCHEDULER VERIFY $(date -u -Iseconds) ===" | tee "$LOG"
+# DOGFOOD-008: the /fleet Hermes plugin symlink must resolve to a real plugin dir.
+# A checkout move or typo'd symlink silently kills every /fleet slash command —
+# fail verify so the break is loud, not silent.
+PLUGIN_LINK="${HOME}/.hermes/plugins/coding-hermes"
+if [ -L "$PLUGIN_LINK" ] && [ -d "$(readlink -f "$PLUGIN_LINK" 2>/dev/null)" ]; then
+    echo "✅ PLUGIN SYMLINK: $PLUGIN_LINK -> $(readlink "$PLUGIN_LINK") OK" | tee -a "$LOG"
+else
+    echo "❌ PLUGIN SYMLINK: $PLUGIN_LINK -> $(readlink "$PLUGIN_LINK" 2>/dev/null || echo 'MISSING') broken — /fleet slash commands will not load" | tee -a "$LOG"
+    exit 1
+fi
+
+echo "=== SCHEDULER VERIFY $(date -u -Iseconds) ===" | tee -a "$LOG"
 "$BIN" --test-verify 3 2>&1 | tee -a "$LOG"
 EXIT_CODE=$?
 
