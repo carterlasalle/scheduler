@@ -1137,3 +1137,30 @@ tasks:
   status: complete
   created_at: '2026-08-15T16:34:45.655352+00:00'
   completed_at: '2026-08-15T16:34:59.544403+00:00'
+- id: DOGFOOD-009
+  title: DELETE soft-delete semantics documented; purge hard-delete; failure-rates
+    ghost filtering
+  criteria:
+  - 1) README.md API table documents DELETE /api/v1/projects/{name}?confirm=true soft-delete
+    semantics (200, row persists, disabled_by/disabled_reason stamped) plus the purge
+    option. 2) ?purge=true hard-delete permanently removes the project row (gone from
+    GET /api/v1/projects AND projects table); refuses without confirm=true. 3) /api/v1/status
+    projects_failure_rates excludes projects whose row no longer exists. 4) Tests
+    cover purge, purge-without-confirm refusal, and failure-rate filtering; existing
+    conformance tests still pass. 5) make build, go vet, gofmt clean, go test -count=1
+    ./... 9/9 packages, golangci-lint 0 issues.
+  status: complete
+  created_at: '2026-08-15T17:58:29.326219+00:00'
+  completed_at: '2026-08-15T17:58:34.585742+00:00'
+- id: DOGFOOD-010
+  title: GAP-044 disable provenance backfill for legacy disabled rows
+  criteria:
+  - '1) Migration v13 in internal/database/migrations.go backfills disabled_by=''legacy'',
+    disabled_reason=''pre-GAP-044 disable'', disabled_at=COALESCE(updated_at, now())
+    for enabled=0 AND disabled_by='''' rows (idempotent, existing provenance untouched).
+    2) Live DB backfilled: exactly 25 legacy rows stamped, 0 rows missing provenance.
+    3) Tests cover the migration (disable_provenance_test.go). 4) make build, go vet,
+    gofmt clean, go test -count=1 ./... 9/9, golangci-lint 0 issues.'
+  status: complete
+  created_at: '2026-08-15T17:58:29.646272+00:00'
+  completed_at: '2026-08-15T17:59:41.806384+00:00'
