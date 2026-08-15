@@ -141,6 +141,14 @@ func (l *Loop) SetNoExecFallback(v bool) {
 	l.spawner.SetNoExecFallback(v)
 }
 
+// EmitHighEvent writes a HIGH severity event to the events table (GAP-048).
+// This exported method lets callers outside the scheduler package (e.g. the
+// daemon's startup wiring in cmd/schedulerd) emit structured events through
+// the loop's event logger without accessing the unexported events field.
+func (l *Loop) EmitHighEvent(component, message string, details map[string]any) {
+	l.events.Emit(context.Background(), SeverityHigh, component, message, details)
+}
+
 // SetSimulation enables simulation/dry-run mode.
 func (l *Loop) SetSimulation(successRate float64) {
 	l.mu.Lock()

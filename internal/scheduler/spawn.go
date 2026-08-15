@@ -295,6 +295,29 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			WorkerDefaults(project),
 		)
 
+		// GAP-048: when the gateway was unreachable at startup and
+		// noExecFallback is set, the spawner has no HTTP client (gateway is
+		// nil) and must NOT silently degrade to exec.Command. Without this
+		// guard the nil-gateway path falls straight through to the exec spawn
+		// block below, bypassing the noExecFallback check that only lives
+		// inside the gateway-fail branch — the daemon exec-spawns forever
+		// even though the flag says to stay idle. The background reconnector
+		// will SetGatewayClient when the gateway recovers, re-engaging HTTP.
+		if s.gateway == nil && s.noExecFallback {
+			log.Printf("SKIPPED: %s tick=%s no gateway client and exec fallback disabled — staying idle", project.Name, tickID)
+			s.noteSpawnFailure(project.Name)
+			if s.events != nil {
+				s.events.Emit(context.Background(), SeverityHigh, "spawn",
+					"gateway unavailable and exec fallback disabled — tick dropped", map[string]any{
+						"project":          project.Name,
+						"tick_id":          tickID,
+						"gateway":          "nil",
+						"no_exec_fallback": true,
+					})
+			}
+			return nil, fmt.Errorf("no gateway client and exec fallback disabled for %s", project.Name)
+		}
+
 		// Try HTTP gateway spawn first (zero process overhead).
 		if s.gateway != nil {
 			reqStart := time.Now() // SCHED-GAP-029: capture before SendResponse for git window

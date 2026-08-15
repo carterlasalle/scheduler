@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -197,7 +198,7 @@ func main() {
 		// Retry gateway connection with backoff — gateway may not be ready
 		// when schedulerd starts (systemd ordering). Once connected, keep
 		// retrying in the background if it ever drops.
-		var gwConnected bool
+		var gwConnected atomic.Bool
 		for attempt := 0; attempt < 10; attempt++ {
 			if err := gwClient.Ping(context.Background()); err != nil {
 				wait := time.Duration(attempt+1) * 2 * time.Second
@@ -206,33 +207,36 @@ func main() {
 			} else {
 				loop.SetGatewayClient(gwClient)
 				log.Printf("GATEWAY: connected to %s — using HTTP API instead of exec.Command", *gatewayURL)
-				gwConnected = true
+				gwConnected.Store(true)
 				break
 			}
 		}
-		if !gwConnected {
-			log.Printf("WARN: gateway %s unreachable after 10 retries — falling back to exec.Command", *gatewayURL)
-		}
-		// Launch background reconnector — keeps trying if gateway drops later.
-		go func() {
-			for {
-				time.Sleep(60 * time.Second)
-				if !gwConnected {
-					continue // already in fallback mode
-				}
-				if err := gwClient.Ping(context.Background()); err != nil {
-					log.Printf("WARN: gateway %s dropped (%v) — retrying...", *gatewayURL, err)
-					for attempt := 0; attempt < 10; attempt++ {
-						time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
-						if err := gwClient.Ping(context.Background()); err == nil {
-							log.Printf("GATEWAY: reconnected to %s", *gatewayURL)
-							loop.SetGatewayClient(gwClient)
-							break
-						}
-					}
-				}
+		// GAP-048: when the gateway is unreachable at startup, the daemon
+		// must honor --no-exec-fallback instead of silently degrading to
+		// exec.Command spawns. With the flag set (the default), the spawner
+		// has no HTTP client and drops ticks until the background reconnector
+		// re-engages HTTP. Without the flag, fall back to exec as before.
+		if !gwConnected.Load() {
+			if *noExecFallback {
+				log.Printf("WARN: gateway %s unreachable after 10 retries — exec fallback disabled (--no-exec-fallback), staying idle", *gatewayURL)
+				loop.EmitHighEvent("gateway", "gateway unreachable at startup and exec fallback disabled — staying idle", map[string]any{
+					"gateway_url":      *gatewayURL,
+					"no_exec_fallback": true,
+					"retries":          10,
+				})
+			} else {
+				log.Printf("WARN: gateway %s unreachable after 10 retries — falling back to exec.Command", *gatewayURL)
 			}
-		}()
+		}
+		// Launch background reconnector (GAP-048 fix): keeps trying if the
+		// gateway drops later AND when the daemon started in fallback mode.
+		// The original code skipped reconnection when gwConnected==false,
+		// so a fallback-start daemon never re-engaged HTTP even after the
+		// gateway recovered. Now the reconnector pings every 60s regardless
+		// and calls SetGatewayClient on success.
+		runGatewayReconnector(context.Background(), gwClient, func() {
+			loop.SetGatewayClient(gwClient)
+		}, &gwConnected, *gatewayURL)
 	}
 
 	// Simulation count mode: generate N ticks and exit.
