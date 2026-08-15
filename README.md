@@ -317,7 +317,7 @@ authority model.
 | `-gateway-key` | `$API_SERVER_KEY` | Hermes gateway API key |
 | `-no-exec-fallback` | `true` | Disable exec.Command fallback when gateway fails (default true for safety) |
 | `-foreman-home` | `~/.hermes/foreman` | HERMES_HOME path for foreman sessions |
-| `-sim-setup` | `false` | Create test fixture with 14 dry-run projects |
+| `-sim-setup` | `false` | Create test fixture with 13 dry-run projects (12 enabled + 1 disabled) |
 | `-sim-ticks` | `10` | Number of evaluation ticks to run in sim-setup mode |
 | `-config` | (none) | Path to TOML fleet config file |
 | `-failure-window` | `100` | Number of recent ticks per project for `/api/v1/status` per-project failure-rate breakdown |

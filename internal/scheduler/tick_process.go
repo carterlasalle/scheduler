@@ -119,7 +119,9 @@ func (l *Loop) evaluate() {
 
 	// Gateway liveness check: ping before spawning. If gateway is dead,
 	// release all slots and skip this cycle. Retry next eval.
-	if l.gatewayClient != nil {
+	// DOGFOOD-007: simulation mode must not depend on a live gateway —
+	// simulated spawns never touch the real spawner.
+	if l.gatewayClient != nil && !l.simulate {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		err := l.gatewayClient.Ping(ctx)
 		cancel()
@@ -148,6 +150,16 @@ func (l *Loop) evaluate() {
 	for _, proj := range packed {
 		if alreadyRunning[proj.Name] {
 			log.Printf("DEDUP: skipping %s — already running", proj.Name)
+			continue
+		}
+		if l.simulate {
+			// DOGFOOD-007: --simulate daemon mode must simulate, never
+			// spawn real foremen. The sim spawner inserts a tick row and
+			// completes it in 50-250ms; unique IDs come from simTickID.
+			tickID := l.simTickID(proj.Name, now)
+			if _, err := l.simSpawner.Spawn(proj, tickID); err != nil {
+				log.Printf("SIM: spawn %s failed: %v", proj.Name, err)
+			}
 			continue
 		}
 		l.slotPool.Spawn(proj, now, noDeliver, l.db)

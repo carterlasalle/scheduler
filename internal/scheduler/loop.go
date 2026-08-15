@@ -7,6 +7,7 @@ import (
 	"log"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coding-herms/scheduler/internal/config"
@@ -57,7 +58,13 @@ type Loop struct {
 	lastZeroSelectEvent time.Time
 	simulate            bool
 	simSuccess          float64
-	noDeliver           bool // suppress Telegram delivery (verify mode, tests)
+	// simSeq guarantees unique simulated tick IDs even when multiple
+	// simulated ticks are generated within the same second (DOGFOOD-007:
+	// RunBulkSim crashed with "UNIQUE constraint failed: ticks.id" because
+	// sim-<project>-<HHMMSS> collided for same-project ticks spawned within
+	// one second).
+	simSeq    atomic.Uint64
+	noDeliver bool // suppress Telegram delivery (verify mode, tests)
 }
 
 // autoDisablePolicy is the configurable failure-rate auto-disable policy.
@@ -160,6 +167,16 @@ func (l *Loop) SetSimulation(successRate float64) {
 	}
 }
 
+// simTickID builds a unique tick ID for a simulated spawn. The sequence
+// suffix guarantees uniqueness even when multiple simulated ticks are
+// generated in the same second (DOGFOOD-007: RunBulkSim crashed with
+// "UNIQUE constraint failed: ticks.id" because sim-<project>-<HHMMSS>
+// collided for same-project ticks spawned within one second).
+func (l *Loop) simTickID(projName string, now time.Time) string {
+	seq := l.simSeq.Add(1) - 1
+	return fmt.Sprintf("sim-%s-%s-%d", projName, now.Format("150405"), seq)
+}
+
 // SetTickTimeout updates the real spawner's per-tick timeout and initializes
 // the concurrent slot pool if needed (BUG-007).
 func (l *Loop) SetTickTimeout(timeout time.Duration) {
@@ -198,7 +215,7 @@ func (l *Loop) RunBulkSim(ctx context.Context, count int) error {
 			n := min(8, len(projects), count-generated)
 			for i := 0; i < n; i++ {
 				proj := projects[(generated+i)%len(projects)]
-				tickID := fmt.Sprintf("sim-%s-%s", proj.Name, now.Format("150405"))
+				tickID := l.simTickID(proj.Name, now)
 				if _, err := l.simSpawner.Spawn(proj, tickID); err != nil {
 					return fmt.Errorf("spawn: %w", err)
 				}
