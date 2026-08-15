@@ -52,7 +52,7 @@ func TestSlotPool_AcquireRelease(t *testing.T) {
 		t.Error("slot should be occupied")
 	}
 
-	pool.Release()
+	pool.Release("test")
 	if pool.Available() != 1 {
 		t.Error("slot should be free after Release")
 	}
@@ -98,6 +98,103 @@ func TestSlotPool_RunningSet(t *testing.T) {
 	}
 }
 
+// ── SCHED-GAP-021: project-aware release ──
+
+// assertRunningSet checks that RunningSet contains exactly the given names.
+func assertRunningSet(t *testing.T, pool *scheduler.SlotPool, want ...string) {
+	t.Helper()
+	rs := pool.RunningSet()
+	if len(rs) != len(want) {
+		t.Fatalf("RunningSet = %v (len %d), want exactly %v (len %d)", rs, len(rs), want, len(want))
+	}
+	for _, n := range want {
+		if !rs[n] {
+			t.Errorf("RunningSet missing %s (got %v)", n, rs)
+		}
+	}
+}
+
+// TestSlotPool_ReleaseOutOfOrderPreservesMarkers is THE regression test for
+// SCHED-GAP-021 (live proof: ring-runner double-spawn 2026-08-09 22:07 while
+// its 21:45 tick was still running). The old FIFO Release() popped the oldest
+// acquisition regardless of which project completed, so a short tick finishing
+// while a long-running project held its slot evicted the LONG-RUNNING
+// project's marker — EVAL's dedup then saw it as free and spawned a duplicate.
+// Release must free ONLY the completing project's marker.
+func TestSlotPool_ReleaseOutOfOrderPreservesMarkers(t *testing.T) {
+	db := newTestDB(t)
+	lc := scheduler.NewLifecycleTracker(db)
+	sp := scheduler.NewSpawner(db, 3)
+	pool := scheduler.NewSlotPool(3, 10*time.Second, sp, lc)
+
+	// A acquires first and runs long; B and C acquire after.
+	for _, n := range []string{"a-long", "b-short", "c-short"} {
+		if !pool.Acquire(context.Background(), n) {
+			t.Fatalf("Acquire %s", n)
+		}
+	}
+	assertRunningSet(t, pool, "a-long", "b-short", "c-short")
+
+	// B completes first — out of acquisition order. Only B's marker may go;
+	// A's (the FIFO-oldest) must be PRESERVED.
+	pool.Release("b-short")
+	assertRunningSet(t, pool, "a-long", "c-short")
+	if pool.Running() != 2 {
+		t.Errorf("Running = %d after releasing b-short, want 2", pool.Running())
+	}
+
+	// C completes next. A's marker must STILL be there.
+	pool.Release("c-short")
+	assertRunningSet(t, pool, "a-long")
+	if pool.Running() != 1 {
+		t.Errorf("Running = %d after releasing c-short, want 1", pool.Running())
+	}
+
+	// A finally completes. Pool empty.
+	pool.Release("a-long")
+	assertRunningSet(t, pool)
+	if pool.Running() != 0 {
+		t.Errorf("Running = %d after releasing a-long, want 0", pool.Running())
+	}
+	if pool.Available() != 3 {
+		t.Errorf("Available = %d after all releases, want 3", pool.Available())
+	}
+}
+
+// TestSlotPool_ReleaseUnknownNameIsNoOp pins the other half of SCHED-GAP-021:
+// releasing a name that holds no slot must NOT pop another project's marker
+// (that silent eviction was the bug) and must not signal SlotFreed.
+func TestSlotPool_ReleaseUnknownNameIsNoOp(t *testing.T) {
+	db := newTestDB(t)
+	lc := scheduler.NewLifecycleTracker(db)
+	sp := scheduler.NewSpawner(db, 2)
+	pool := scheduler.NewSlotPool(2, 10*time.Second, sp, lc)
+
+	pool.Acquire(context.Background(), "a")
+	pool.Acquire(context.Background(), "b")
+
+	ch := pool.SlotFreed()
+	drainCh(ch, 50*time.Millisecond)
+
+	// "ghost" holds no slot — on a FULL pool this is exactly where the old
+	// code popped the FIFO-oldest marker.
+	pool.Release("ghost")
+
+	assertRunningSet(t, pool, "a", "b")
+	if pool.Running() != 2 {
+		t.Errorf("Running = %d after ghost release, want 2", pool.Running())
+	}
+	if pool.Available() != 0 {
+		t.Errorf("Available = %d after ghost release, want 0", pool.Available())
+	}
+	select {
+	case <-ch:
+		t.Error("SlotFreed fired for a no-op release — no slot was freed")
+	case <-time.After(150 * time.Millisecond):
+		// Pass — no event.
+	}
+}
+
 // ── Goroutine Leak Tests ──
 
 func TestSlotPool_NoGoroutineLeak(t *testing.T) {
@@ -139,7 +236,7 @@ func TestSlotPool_SlotFreedFiresOnRelease(t *testing.T) {
 	ch := pool.SlotFreed()
 	drainCh(ch, 50*time.Millisecond)
 
-	pool.Release()
+	pool.Release("a")
 
 	select {
 	case <-ch:
@@ -162,9 +259,9 @@ func TestSlotPool_SlotFreedMultipleReleases(t *testing.T) {
 	ch := pool.SlotFreed()
 	drainCh(ch, 50*time.Millisecond)
 
-	pool.Release()
-	pool.Release()
-	pool.Release()
+	pool.Release("a")
+	pool.Release("b")
+	pool.Release("c")
 
 	fired := 0
 	for fired < 3 {

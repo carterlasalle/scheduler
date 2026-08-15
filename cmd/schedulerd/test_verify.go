@@ -3,10 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"time"
 
+	"github.com/coding-herms/scheduler/internal/api"
 	"github.com/coding-herms/scheduler/internal/database"
 	"github.com/coding-herms/scheduler/internal/scheduler"
 )
@@ -242,6 +246,190 @@ func testVerify(cycles int) error {
 	check("First cycle = highest-priority pack", prioOK,
 		fmt.Sprintf("first cycle %s: %d/%d expected projects spawned", firstCycle, len(gotFirst), len(wantFirst)))
 
+	// ── Performance audit (DOGFOOD-006) ─────────────────────────────────
+	// Runs after the correctness checks so the seeded data cannot disturb
+	// them. All output is informational — the pass/fail verdict above is
+	// driven by the 6 correctness checks.
+	//
+	// 7. Seed a production-scale tick history so the latency and
+	//    failure-rate measurements run at realistic row counts (the live
+	//    fleet DB holds ~30k completed ticks). The mix is deliberately
+	//    uneven: epsilon dominates the failed bucket the way starved
+	//    projects do on the live board.
+	type outcomeMix struct {
+		completed int
+		failed    int
+	}
+	mixes := []struct {
+		name string
+		mix  outcomeMix
+	}{
+		{"alpha", outcomeMix{2000, 200}},
+		{"beta", outcomeMix{1800, 150}},
+		{"gamma", outcomeMix{1500, 300}},
+		{"delta", outcomeMix{1200, 800}},
+		{"epsilon", outcomeMix{3000, 7000}}, // dominant offender
+		{"zeta", outcomeMix{1500, 4000}},
+		{"eta", outcomeMix{800, 4850}},
+	}
+	seeded := 0
+	{
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("seed tx: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }() // no-op after successful Commit
+		stmt, err := tx.PrepareContext(ctx, `INSERT INTO ticks
+			(id, project_name, session_id, status, outcome, spawned_at, completed_at, exit_code, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		if err != nil {
+			return fmt.Errorf("seed prepare: %w", err)
+		}
+		base := time.Now().Add(-48 * time.Hour)
+		i := 0
+		for _, m := range mixes {
+			for s := 0; s < m.mix.completed; s++ {
+				spawned := base.Add(time.Duration(i) * time.Minute).UTC().Format(time.RFC3339)
+				if _, err := stmt.ExecContext(ctx, fmt.Sprintf("syn-%06d", i), m.name,
+					fmt.Sprintf("sess-%06d", i), "completed", "committed", spawned,
+					base.Add(time.Duration(i)*time.Minute+90*time.Second).UTC().Format(time.RFC3339), 0, spawned); err != nil {
+					return fmt.Errorf("seed completed %s: %w", m.name, err)
+				}
+				i++
+				seeded++
+			}
+			for s := 0; s < m.mix.failed; s++ {
+				spawned := base.Add(time.Duration(i) * time.Minute).UTC().Format(time.RFC3339)
+				if _, err := stmt.ExecContext(ctx, fmt.Sprintf("syn-%06d", i), m.name,
+					fmt.Sprintf("sess-%06d", i), "failed", "failed", spawned,
+					base.Add(time.Duration(i)*time.Minute+90*time.Second).UTC().Format(time.RFC3339), 1, spawned); err != nil {
+					return fmt.Errorf("seed failed %s: %w", m.name, err)
+				}
+				i++
+				seeded++
+			}
+		}
+		if err := stmt.Close(); err != nil {
+			return fmt.Errorf("seed stmt close: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("seed commit: %w", err)
+		}
+	}
+	fmt.Printf("\n── Performance audit (DOGFOOD-006) ──\n")
+	fmt.Printf("seeded %d synthetic ticks at production scale\n", seeded)
+
+	// 8. Read-endpoint latency: p50/p90/p99 over N requests through the
+	//    real API handler. Spec §10 promises <100ms p99 on read endpoints.
+	svr := httptest.NewServer(api.NewServer(db, loop).Handler())
+	defer svr.Close()
+	const nReq = 100
+	probe := func(path string) []time.Duration {
+		ds := make([]time.Duration, 0, nReq)
+		for i := 0; i < nReq; i++ {
+			t0 := time.Now()
+			resp, err := http.Get(svr.URL + path)
+			if err != nil {
+				return nil
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			ds = append(ds, time.Since(t0))
+		}
+		return ds
+	}
+	printLatency := func(name string, ds []time.Duration) {
+		if len(ds) == 0 {
+			fmt.Printf("  %-24s FAILED (no responses)\n", name)
+			return
+		}
+		p50, p90, p99, mx := latencyStats(ds)
+		fmt.Printf("  %-24s n=%d  p50=%v  p90=%v  p99=%v  max=%v\n", name, len(ds), p50, p90, p99, mx)
+		if p99 >= 100*time.Millisecond {
+			fmt.Printf("    ⚠ p99 ≥ 100ms — spec §10 read-latency promise exceeded\n")
+		}
+	}
+	projLat := probe("/api/v1/projects")
+	statLat := probe("/api/v1/status")
+	printLatency("GET /api/v1/projects", projLat)
+	printLatency("GET /api/v1/status", statLat)
+
+	// 9. Failure-rate breakdown by project — which projects dominate the
+	//    failed bucket (the live-board open question: recent_outcomes shows
+	//    a ~70-79% fleet failure rate). Same WHERE clause as
+	//    countRecentOutcomes (completed_at IS NOT NULL), grouped by project.
+	type projOutcome struct {
+		name      string
+		completed int
+		failed    int
+		timeout   int
+	}
+	var outcomes []projOutcome
+	{
+		rows, err := db.QueryContext(ctx, `
+			SELECT project_name, status, COUNT(*)
+			FROM ticks
+			WHERE completed_at IS NOT NULL
+			GROUP BY project_name, status
+			ORDER BY project_name, status`)
+		if err != nil {
+			return fmt.Errorf("failure breakdown query: %w", err)
+		}
+		defer rows.Close()
+		byName := map[string]*projOutcome{}
+		for rows.Next() {
+			var name, status string
+			var n int
+			if err := rows.Scan(&name, &status, &n); err != nil {
+				return fmt.Errorf("failure breakdown scan: %w", err)
+			}
+			po, ok := byName[name]
+			if !ok {
+				po = &projOutcome{name: name}
+				byName[name] = po
+			}
+			switch status {
+			case "completed":
+				po.completed = n
+			case "failed":
+				po.failed = n
+			case "timeout":
+				po.timeout = n
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("failure breakdown rows: %w", err)
+		}
+		for _, po := range byName {
+			outcomes = append(outcomes, *po)
+		}
+		sort.Slice(outcomes, func(i, j int) bool {
+			fi := outcomes[i].failed + outcomes[i].timeout
+			fj := outcomes[j].failed + outcomes[j].timeout
+			if fi != fj {
+				return fi > fj
+			}
+			return outcomes[i].name < outcomes[j].name
+		})
+	}
+	fmt.Printf("\n── Failure-rate breakdown by project (top offenders) ──\n")
+	fmt.Printf("  %-12s %10s %10s %10s %8s\n", "project", "completed", "failed", "timeout", "fail%")
+	totC, totF, totT := 0, 0, 0
+	for _, po := range outcomes {
+		tot := po.completed + po.failed + po.timeout
+		if tot == 0 {
+			continue
+		}
+		totC += po.completed
+		totF += po.failed
+		totT += po.timeout
+		fmt.Printf("  %-12s %10d %10d %10d %7.1f%%\n", po.name,
+			po.completed, po.failed, po.timeout,
+			float64(po.failed+po.timeout)/float64(tot)*100)
+	}
+	fmt.Printf("  %-12s %10d %10d %10d %7.1f%%\n", "TOTAL",
+		totC, totF, totT, float64(totF+totT)/float64(totC+totF+totT)*100)
+
 	fmt.Printf("\n---\n%d checks, %d failures\n", checks, failures)
 	if failures > 0 {
 		fmt.Println("❌ VERIFY FAILED")
@@ -249,4 +437,18 @@ func testVerify(cycles int) error {
 	}
 	fmt.Println("✅ SCHEDULER VERIFIED")
 	return nil
+}
+
+// latencyStats returns p50/p90/p99 and the max of a latency sample.
+func latencyStats(ds []time.Duration) (p50, p90, p99, max time.Duration) {
+	if len(ds) == 0 {
+		return 0, 0, 0, 0
+	}
+	s := make([]time.Duration, len(ds))
+	copy(s, ds)
+	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	p := func(frac float64) time.Duration {
+		return s[int(frac*float64(len(s)-1))]
+	}
+	return p(0.50), p(0.90), p(0.99), s[len(s)-1]
 }

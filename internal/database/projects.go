@@ -49,6 +49,25 @@ func CreateProject(ctx context.Context, db *sql.DB, p *Project) error {
 			return fmt.Errorf("create project %q: duplicate workdir check: %w", p.Name, err)
 		}
 	}
+	// Case-insensitive name uniqueness — prevents ghost duplicate projects
+	// (e.g. "heading" vs "HEADING") that SQLite's case-sensitive TEXT PRIMARY
+	// KEY would otherwise allow. Refuse at creation when the existing project
+	// is ENABLED; a disabled duplicate is harmless (archived entry). Mirrors
+	// the workdir check above.
+	if p.Name != "" {
+		var existingName string
+		var existingNameEnabled int
+		err := db.QueryRowContext(ctx,
+			`SELECT name, enabled FROM projects WHERE LOWER(name) = LOWER(?) LIMIT 1`,
+			p.Name).Scan(&existingName, &existingNameEnabled)
+		if err == nil && existingNameEnabled == 1 {
+			return fmt.Errorf("create project %q: name %q already registered by enabled project %q (case-insensitive duplicate)",
+				p.Name, p.Name, existingName)
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("create project %q: duplicate name check: %w", p.Name, err)
+		}
+	}
 	const q = `INSERT INTO projects
 (name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
@@ -65,14 +84,14 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 // GetProject loads a single project by name. Returns ErrProjectNotFound if
 // no row matches.
 func GetProject(ctx context.Context, db *sql.DB, name string) (*Project, error) {
-	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures
+	const q = `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
 FROM projects WHERE name = ?`
 	var p Project
 	var enabled int
 	var nsID sql.NullString
 	err := db.QueryRowContext(ctx, q, name).Scan(
 		&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
-		&p.DecayRate, &p.Model, &p.Provider, &p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures)
+		&p.DecayRate, &p.Model, &p.Provider, &p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled, &p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrProjectNotFound, name)
 	}
@@ -89,7 +108,7 @@ FROM projects WHERE name = ?`
 // ListProjects returns projects. If enabledOnly is true, only enabled=1
 // rows are returned. Results are ordered by name for stable output.
 func ListProjects(ctx context.Context, db *sql.DB, enabledOnly bool) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
 FROM projects`
 	if enabledOnly {
 		q += " WHERE enabled = 1"
@@ -110,7 +129,7 @@ FROM projects`
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 			&p.DecayRate, &p.Model, &p.Provider, &p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled,
-			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures); err != nil {
+			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
 		p.Enabled = enabled != 0
@@ -128,7 +147,7 @@ FROM projects`
 // ListProjectsByNamespace returns all projects assigned to the given namespace,
 // ordered by name. Returns an empty slice if no projects match.
 func ListProjectsByNamespace(ctx context.Context, db *sql.DB, namespaceID string) ([]Project, error) {
-	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures
+	q := `SELECT name, repo_url, workdir, weight, priority, cooldown_s, decay_rate, model, provider, worker_model, worker_provider, gateway_key, command, namespace_id, deliver, enabled, created_at, updated_at, consecutive_failures, COALESCE(last_tick_started, ''), COALESCE(last_tick_completed, ''), COALESCE(disabled_at, ''), COALESCE(disabled_by, ''), COALESCE(disabled_reason, '')
 FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 
 	rows, err := db.QueryContext(ctx, q, namespaceID)
@@ -145,7 +164,7 @@ FROM projects WHERE namespace_id = ? ORDER BY name ASC`
 		if err := rows.Scan(
 			&p.Name, &p.RepoURL, &p.Workdir, &p.Weight, &p.Priority, &p.CooldownS,
 			&p.DecayRate, &p.Model, &p.Provider, &p.WorkerModel, &p.WorkerProvider, &p.GatewayKey, &p.Command, &nsID, &p.Deliver, &enabled,
-			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures); err != nil {
+			&p.CreatedAt, &p.UpdatedAt, &p.ConsecutiveFailures, &p.LastTickStarted, &p.LastTickCompleted, &p.DisabledAt, &p.DisabledBy, &p.DisabledReason); err != nil {
 			return nil, fmt.Errorf("scan project row: %w", err)
 		}
 		p.Enabled = enabled != 0
@@ -181,6 +200,13 @@ type ProjectUpdates struct {
 	Command        *string  `json:"command"`
 	NamespaceID    *string  `json:"namespace_id"` // set to "" to unassign from namespace
 	Enabled        *bool    `json:"enabled"`
+	// Disable provenance overrides (GAP-044): when Enabled transitions
+	// true→false, DisabledBy/DisabledReason default to "api"/"disabled via
+	// API update" unless explicitly supplied here; DisabledAt defaults to
+	// the update time. A false→true transition clears all three.
+	DisabledAt     *string `json:"disabled_at"`
+	DisabledBy     *string `json:"disabled_by"`
+	DisabledReason *string `json:"disabled_reason"`
 }
 
 // UnmarshalJSON decodes ProjectUpdates from JSON. Canonical keys are
@@ -268,14 +294,64 @@ func (u *ProjectUpdates) UnmarshalJSON(data []byte) error {
 		var v bool
 		fill("Enabled", &v, func() { u.Enabled = &v })
 	}
+	if u.DisabledAt == nil {
+		var v string
+		fill("DisabledAt", &v, func() { u.DisabledAt = &v })
+	}
+	if u.DisabledBy == nil {
+		var v string
+		fill("DisabledBy", &v, func() { u.DisabledBy = &v })
+	}
+	if u.DisabledReason == nil {
+		var v string
+		fill("DisabledReason", &v, func() { u.DisabledReason = &v })
+	}
 	return nil
 }
 
 // UpdateProject applies the given updates to the project named name. Only
 // the fields present in updates are modified; UpdatedAt is always refreshed.
+//
+// GAP-044 disable provenance: when Enabled transitions true→false the
+// disabled_at/by/reason columns are stamped (defaults: now, "api",
+// "disabled via API update" — callers may supply explicit overrides via
+// the Disabled* fields). A false→true transition (resume) clears all
+// three. Non-transition updates leave them untouched.
 func UpdateProject(ctx context.Context, db *sql.DB, name string, updates ProjectUpdates) error {
 	setClauses := []string{"updated_at = ?"}
 	args := []any{nowUTC()}
+
+	// GAP-044: resolve the enabled transition before building clauses.
+	if updates.Enabled != nil {
+		var curEnabled int
+		err := db.QueryRowContext(ctx,
+			`SELECT enabled FROM projects WHERE name = ?`, name).Scan(&curEnabled)
+		if err != nil {
+			return fmt.Errorf("read current enabled for %q: %w", name, err)
+		}
+		now := nowUTC()
+		if curEnabled == 1 && !*updates.Enabled {
+			// disable transition — stamp provenance (caller overrides win)
+			if updates.DisabledAt == nil {
+				updates.DisabledAt = &now
+			}
+			if updates.DisabledBy == nil {
+				by := "api"
+				updates.DisabledBy = &by
+			}
+			if updates.DisabledReason == nil {
+				reason := "disabled via API update"
+				updates.DisabledReason = &reason
+			}
+		} else if curEnabled == 0 && *updates.Enabled {
+			// resume — clear provenance with explicit NULL clauses
+			updates.DisabledAt = nil
+			updates.DisabledBy = nil
+			updates.DisabledReason = nil
+			setClauses = append(setClauses,
+				"disabled_at = NULL", "disabled_by = NULL", "disabled_reason = NULL")
+		}
+	}
 
 	if updates.RepoURL != nil {
 		setClauses = append(setClauses, "repo_url = ?")
@@ -333,6 +409,18 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 		setClauses = append(setClauses, "enabled = ?")
 		args = append(args, boolToInt(*updates.Enabled))
 	}
+	if updates.DisabledAt != nil {
+		setClauses = append(setClauses, "disabled_at = ?")
+		args = append(args, *updates.DisabledAt)
+	}
+	if updates.DisabledBy != nil {
+		setClauses = append(setClauses, "disabled_by = ?")
+		args = append(args, *updates.DisabledBy)
+	}
+	if updates.DisabledReason != nil {
+		setClauses = append(setClauses, "disabled_reason = ?")
+		args = append(args, *updates.DisabledReason)
+	}
 
 	args = append(args, name)
 	q := "UPDATE projects SET " + strings.Join(setClauses, ", ") + " WHERE name = ?"
@@ -352,9 +440,58 @@ func UpdateProject(ctx context.Context, db *sql.DB, name string, updates Project
 }
 
 // DeleteProject soft-deletes a project by setting enabled=0. The row is
-// retained so historical ticks remain referentially valid.
+// retained so historical ticks stay referentially valid.
+//
+// GAP-044: the soft-delete also stamps disable provenance. COALESCE keeps
+// any existing provenance (e.g. a prior pause) and backfills legacy rows
+// disabled before migration v12 (ch-delta class) — the API guard only
+// allows deleting already-disabled projects, so this path never sees an
+// enabled→disabled transition and must write provenance itself.
 func DeleteProject(ctx context.Context, db *sql.DB, name string) error {
-	return UpdateProject(ctx, db, name, ProjectUpdates{Enabled: BoolPtr(false)})
+	now := nowUTC()
+	_, err := db.ExecContext(ctx,
+		`UPDATE projects SET enabled = 0,
+		   disabled_at = COALESCE(disabled_at, ?),
+		   disabled_by = COALESCE(disabled_by, 'api-delete'),
+		   disabled_reason = COALESCE(disabled_reason, 'soft-deleted via DELETE ?confirm=true'),
+		   updated_at = ?
+		 WHERE name = ?`,
+		now, now, name)
+	if err != nil {
+		return fmt.Errorf("delete project %q: %w", name, err)
+	}
+	return nil
+}
+
+// PurgeProject permanently removes a project row from the projects table
+// (hard delete — DOGFOOD-009). Historical ticks are retained: they reference
+// projects by name string, and the failure-rate breakdown in /api/v1/status
+// filters to existing projects, so a purged project's ticks never resurface
+// as ghosts.
+//
+// The ticks.project_name foreign key (NO ACTION) would normally block the
+// DELETE while historical ticks exist. Purge therefore disables FK
+// enforcement for the duration of the DELETE on the single shared
+// connection (SetMaxOpenConns(1) makes this race-free) and restores it via
+// defer — the same semantics as the documented manual hard-delete SQL.
+func PurgeProject(ctx context.Context, db *sql.DB, name string) error {
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("purge project %q: disable foreign keys: %w", name, err)
+	}
+	defer func() { _, _ = db.ExecContext(ctx, `PRAGMA foreign_keys=ON`) }()
+
+	res, err := db.ExecContext(ctx, `DELETE FROM projects WHERE name = ?`, name)
+	if err != nil {
+		return fmt.Errorf("purge project %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("purge project %q: rows affected: %w", name, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: %s", ErrProjectNotFound, name)
+	}
+	return nil
 }
 
 // boolToInt converts a bool to SQLite's INTEGER representation.

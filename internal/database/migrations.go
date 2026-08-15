@@ -9,7 +9,7 @@ import (
 
 // latestMigration is the highest migration version known to this build.
 // Bump it when adding a new migration to the migrations slice below.
-const latestMigration = 10
+const latestMigration = 13
 
 // migration describes a single forward-only schema change.
 type migration struct {
@@ -189,13 +189,36 @@ ALTER TABLE projects ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
 	},
 	{
 		version: 10,
-		desc:    "add duckbrain_sync_dedup table to make DuckBrainSync idempotent",
+		desc:    "add heartbeat_at column to ticks for gateway-tick liveness (S-GAP-003)",
 		stmt: `
-CREATE TABLE IF NOT EXISTS duckbrain_sync_dedup (
-    mem_key      TEXT PRIMARY KEY,
-    content_hash TEXT NOT NULL,
-    synced_at    TEXT NOT NULL
-);
+ALTER TABLE ticks ADD COLUMN heartbeat_at TEXT;
+`,
+	},
+	{
+		version: 11,
+		desc:    "partial covering index on ticks(status, completed_at) for /api/v1/status outcome counts (S-GAP-007)",
+		stmt: `
+CREATE INDEX IF NOT EXISTS idx_ticks_status_completed ON ticks(status, completed_at) WHERE completed_at IS NOT NULL;
+`,
+	},
+	{
+		version: 12,
+		desc:    "add disable provenance columns to projects (GAP-044)",
+		stmt: `
+ALTER TABLE projects ADD COLUMN disabled_at TEXT;
+ALTER TABLE projects ADD COLUMN disabled_by TEXT;
+ALTER TABLE projects ADD COLUMN disabled_reason TEXT;
+`,
+	},
+	{
+		version: 13,
+		desc:    "backfill disable provenance for pre-GAP-044 disabled rows (DOGFOOD-010)",
+		stmt: `
+UPDATE projects SET
+    disabled_by = 'legacy',
+    disabled_reason = 'pre-GAP-044 disable',
+    disabled_at = COALESCE(disabled_at, COALESCE(updated_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')))
+WHERE enabled = 0 AND COALESCE(disabled_by, '') = '';
 `,
 	},
 }

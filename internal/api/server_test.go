@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -181,6 +182,106 @@ func TestAPI_Status(t *testing.T) {
 	}
 }
 
+// TestAPI_Status_ProjectsFailureRates (SCHED-GAP-018) verifies the
+// projects_failure_rates field is present in /api/v1/status with the correct
+// shape and per-project failure-rate math.
+func TestAPI_Status_ProjectsFailureRates(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+	mustCreateAPITestProject(t, a.db, "beta")
+
+	// alpha: 8 failed + 2 completed = 80% failure rate over 10 ticks.
+	now := time.Now()
+	for i := 0; i < 8; i++ {
+		insertAPITestTick(t, a.db, "alpha-fail-"+strconv.Itoa(i), "alpha", "failed",
+			now.Add(-time.Duration(10-i)*time.Minute))
+	}
+	for i := 0; i < 2; i++ {
+		insertAPITestTick(t, a.db, "alpha-ok-"+strconv.Itoa(i), "alpha", "completed",
+			now.Add(-time.Duration(2-i)*time.Minute))
+	}
+	// beta: 5 completed = 0% failure rate.
+	for i := 0; i < 5; i++ {
+		insertAPITestTick(t, a.db, "beta-ok-"+strconv.Itoa(i), "beta", "completed",
+			now.Add(-time.Duration(5-i)*time.Minute))
+	}
+
+	status, body := a.do(t, "GET", "/api/v1/status", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+
+	// failure_window should be present and an integer (default 100).
+	fw, ok := body["failure_window"]
+	if !ok {
+		t.Fatalf("failure_window missing from status response: %v", body)
+	}
+	if n, ok := fw.(float64); !ok || int(n) != 100 {
+		t.Errorf("failure_window = %v, want 100", fw)
+	}
+
+	// projects_failure_rates should be present and a map.
+	rates, ok := body["projects_failure_rates"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("projects_failure_rates missing or wrong type: %T", body["projects_failure_rates"])
+	}
+
+	// alpha: {failed: 8, total: 10, failure_rate: 0.8}
+	alpha, ok := rates["alpha"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("alpha missing from projects_failure_rates: %v", rates)
+	}
+	if failed, ok := alpha["failed"].(float64); !ok || int(failed) != 8 {
+		t.Errorf("alpha failed = %v, want 8", alpha["failed"])
+	}
+	if total, ok := alpha["total"].(float64); !ok || int(total) != 10 {
+		t.Errorf("alpha total = %v, want 10", alpha["total"])
+	}
+	if rate, ok := alpha["failure_rate"].(float64); !ok || rate != 0.8 {
+		t.Errorf("alpha failure_rate = %v, want 0.8", alpha["failure_rate"])
+	}
+
+	// beta: {failed: 0, total: 5, failure_rate: 0}
+	beta, ok := rates["beta"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("beta missing from projects_failure_rates: %v", rates)
+	}
+	if rate, ok := beta["failure_rate"].(float64); !ok || rate != 0 {
+		t.Errorf("beta failure_rate = %v, want 0", beta["failure_rate"])
+	}
+}
+
+// TestAPI_Status_ProjectsFailureRates_Empty verifies the field is present
+// even when there are no ticks.
+func TestAPI_Status_ProjectsFailureRates_Empty(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha")
+
+	status, body := a.do(t, "GET", "/api/v1/status", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	rates, ok := body["projects_failure_rates"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("projects_failure_rates missing or wrong type: %T", body["projects_failure_rates"])
+	}
+	if len(rates) != 0 {
+		t.Errorf("expected empty projects_failure_rates, got %v", rates)
+	}
+}
+
+// insertAPITestTick inserts a tick row directly into the DB for status tests.
+func insertAPITestTick(t *testing.T, db *sql.DB, id, project, status string, spawnedAt time.Time) {
+	t.Helper()
+	ts := spawnedAt.Format(time.RFC3339)
+	_, err := db.Exec(
+		`INSERT INTO ticks (id, project_name, status, completed_at, spawned_at, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, project, status, ts, ts, ts)
+	if err != nil {
+		t.Fatalf("insert tick %s: %v", id, err)
+	}
+}
+
 // --- projects list/create ---
 
 func TestAPI_ListProjects_Empty(t *testing.T) {
@@ -315,6 +416,74 @@ func TestAPI_GetProject_NotFound(t *testing.T) {
 	}
 }
 
+// TestAPI_ListProjects_LastTickStarted (SCHED-GAP-006) verifies that the
+// last_tick_started and last_tick_completed fields are surfaced in the
+// /api/v1/projects payloads. A ticked project must carry the exact
+// timestamps written by the scheduler; a never-ticked project must still
+// emit both keys with value "" (COALESCE keeps them non-NULL).
+func TestAPI_ListProjects_LastTickStarted(t *testing.T) {
+	a := newAPITestServer(t)
+	mustCreateAPITestProject(t, a.db, "alpha") // never ticked
+
+	// Stamp a ticked project directly on the DB (mirrors what
+	// internal/scheduler/spawn.go + lifecycle.go would write).
+	if _, err := a.db.Exec(
+		`UPDATE projects SET last_tick_started = ?, last_tick_completed = ? WHERE name = ?`,
+		"2026-08-07T12:00:00Z", "2026-08-07T13:00:00Z", "alpha"); err != nil {
+		t.Fatalf("stamp timestamps: %v", err)
+	}
+
+	// --- list endpoint ---
+	status, body := a.do(t, "GET", "/api/v1/projects", nil)
+	if status != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", status)
+	}
+	projs := body["projects"].([]interface{})
+	if len(projs) != 1 {
+		t.Fatalf("got %d projects, want 1", len(projs))
+	}
+	p := projs[0].(map[string]interface{})
+	if got := p["last_tick_started"]; got != "2026-08-07T12:00:00Z" {
+		t.Errorf("list last_tick_started = %v, want 2026-08-07T12:00:00Z", got)
+	}
+	if got := p["last_tick_completed"]; got != "2026-08-07T13:00:00Z" {
+		t.Errorf("list last_tick_completed = %v, want 2026-08-07T13:00:00Z", got)
+	}
+
+	// --- single-project endpoint ---
+	status, body = a.do(t, "GET", "/api/v1/projects/alpha", nil)
+	if status != http.StatusOK {
+		t.Fatalf("get status = %d, want 200", status)
+	}
+	p = body["project"].(map[string]interface{})
+	if got := p["last_tick_started"]; got != "2026-08-07T12:00:00Z" {
+		t.Errorf("get last_tick_started = %v, want 2026-08-07T12:00:00Z", got)
+	}
+	if got := p["last_tick_completed"]; got != "2026-08-07T13:00:00Z" {
+		t.Errorf("get last_tick_completed = %v, want 2026-08-07T13:00:00Z", got)
+	}
+
+	// --- never-ticked project: both keys present, empty string ---
+	mustCreateAPITestProject(t, a.db, "fresh")
+	status, body = a.do(t, "GET", "/api/v1/projects/fresh", nil)
+	if status != http.StatusOK {
+		t.Fatalf("get fresh status = %d, want 200", status)
+	}
+	p = body["project"].(map[string]interface{})
+	v, ok := p["last_tick_started"]
+	if !ok {
+		t.Errorf("fresh project missing last_tick_started key: %v", p)
+	} else if v != "" {
+		t.Errorf("fresh last_tick_started = %v, want empty string", v)
+	}
+	v, ok = p["last_tick_completed"]
+	if !ok {
+		t.Errorf("fresh project missing last_tick_completed key: %v", p)
+	} else if v != "" {
+		t.Errorf("fresh last_tick_completed = %v, want empty string", v)
+	}
+}
+
 func TestAPI_UpdateProject_Success(t *testing.T) {
 	a := newAPITestServer(t)
 	mustCreateAPITestProject(t, a.db, "alpha")
@@ -415,7 +584,7 @@ func TestAPI_SpawnProject_MethodNotAllowed(t *testing.T) {
 func TestAPI_ProjectByID_MethodNotAllowed(t *testing.T) {
 	a := newAPITestServer(t)
 	mustCreateAPITestProject(t, a.db, "alpha")
-	status, _ := a.do(t, "DELETE", "/api/v1/projects/alpha", nil)
+	status, _ := a.do(t, "PATCH", "/api/v1/projects/alpha", nil)
 	if status != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", status)
 	}
@@ -604,6 +773,86 @@ func TestAPI_Queue_MethodNotAllowed(t *testing.T) {
 	status, _ := a.do(t, "POST", "/api/v1/queue", nil)
 	if status != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", status)
+	}
+}
+
+// --- config ---
+
+func TestAPI_Config_Success(t *testing.T) {
+	a := newAPITestServer(t)
+	a.server.SetResolvedConfig(api.ResolvedConfig{
+		DBPath:                 "/tmp/sched.db",
+		Listen:                 "127.0.0.1:9090",
+		MinInterval:            "30s",
+		MaxInterval:            "24h",
+		NumLevels:              10,
+		WeightBudget:           100,
+		MaxConcurrent:          2,
+		TickTimeout:            "2h",
+		NamespaceMode:          true,
+		AutoDisableFailureRate: 0.5,
+		AutoDisableWindow:      100,
+		AutoDisableMinTicks:    50,
+		FailureWindow:          100,
+		Gateway: api.GatewayConfigSnapshot{
+			URL:            "http://127.0.0.1:8642",
+			Key:            "supersecretkey",
+			ForemanHome:    "/tmp/foreman",
+			NoExecFallback: true,
+		},
+		DuckBrain: api.DuckBrainConfigSnapshot{
+			Namespace: "coding-hermes",
+			URL:       "http://localhost:3000",
+		},
+	})
+	status, body := a.do(t, "GET", "/api/v1/config", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if body["min_interval"] != "30s" {
+		t.Errorf("min_interval = %v, want \"30s\"", body["min_interval"])
+	}
+	if body["max_concurrent"] != float64(2) {
+		t.Errorf("max_concurrent = %v, want 2", body["max_concurrent"])
+	}
+	if body["auto_disable_failure_rate"] != 0.5 {
+		t.Errorf("auto_disable_failure_rate = %v, want 0.5", body["auto_disable_failure_rate"])
+	}
+	if body["db_path"] != "/tmp/sched.db" {
+		t.Errorf("db_path = %v, want \"/tmp/sched.db\"", body["db_path"])
+	}
+	if body["namespace_mode"] != true {
+		t.Errorf("namespace_mode = %v, want true", body["namespace_mode"])
+	}
+	gw, ok := body["gateway"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response missing gateway object")
+	}
+	if gw["url"] != "http://127.0.0.1:8642" {
+		t.Errorf("gateway.url = %v, want \"http://127.0.0.1:8642\"", gw["url"])
+	}
+	if gw["key"] != "supe****" {
+		t.Errorf("gateway.key = %v, want masked \"supe****\" (plaintext must never leak)", gw["key"])
+	}
+	if gw["no_exec_fallback"] != true {
+		t.Errorf("gateway.no_exec_fallback = %v, want true", gw["no_exec_fallback"])
+	}
+	duck, ok := body["duckbrain"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response missing duckbrain object")
+	}
+	if duck["namespace"] != "coding-hermes" {
+		t.Errorf("duckbrain.namespace = %v, want \"coding-hermes\"", duck["namespace"])
+	}
+}
+
+func TestAPI_Config_MethodNotAllowed(t *testing.T) {
+	a := newAPITestServer(t)
+	for _, method := range []string{"POST", "PUT", "DELETE"} {
+		status, _ := a.do(t, method, "/api/v1/config", nil)
+		if status != http.StatusMethodNotAllowed {
+			t.Errorf("%s /api/v1/config status = %d, want 405", method, status)
+		}
 	}
 }
 

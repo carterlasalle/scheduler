@@ -308,6 +308,7 @@ func TestMCP_FleetProjectDetail_MissingName(t *testing.T) {
 	})
 	if resp.Error == nil {
 		t.Fatal("expected error for missing name")
+		return
 	}
 	if !strings.Contains(resp.Error.Message, "name is required") {
 		t.Errorf("error = %q, want mention of name", resp.Error.Message)
@@ -352,6 +353,7 @@ func TestMCP_FleetSetWeight_OutOfRange(t *testing.T) {
 	})
 	if resp.Error == nil {
 		t.Fatal("expected error for weight out of range")
+		return
 	}
 	if !strings.Contains(resp.Error.Message, "weight must be 1-100") {
 		t.Errorf("error = %q, want range error", resp.Error.Message)
@@ -395,6 +397,7 @@ func TestMCP_FleetSetPriority_OutOfRange(t *testing.T) {
 	})
 	if resp.Error == nil {
 		t.Fatal("expected error for priority out of range")
+		return
 	}
 }
 
@@ -453,6 +456,7 @@ func TestMCP_FleetSetDecay_RejectsZero(t *testing.T) {
 	})
 	if resp.Error == nil {
 		t.Fatal("expected error for decay=0, got nil")
+		return
 	}
 	if !strings.Contains(resp.Error.Message, "decay must be > 0") {
 		t.Fatalf("error message = %q, want decay guard message", resp.Error.Message)
@@ -522,6 +526,7 @@ func TestMCP_FleetPause_MissingName(t *testing.T) {
 	})
 	if resp.Error == nil {
 		t.Fatal("expected error for missing name")
+		return
 	}
 }
 
@@ -572,6 +577,7 @@ func TestMCP_FleetAdd_MissingFields(t *testing.T) {
 	})
 	if resp.Error == nil {
 		t.Fatal("expected error for missing repo/workdir")
+		return
 	}
 }
 
@@ -668,6 +674,7 @@ func TestMCP_UnknownTool(t *testing.T) {
 	})
 	if resp.Error == nil {
 		t.Fatal("expected error for unknown tool")
+		return
 	}
 	if !strings.Contains(resp.Error.Message, "unknown tool") {
 		t.Errorf("error = %q, want 'unknown tool'", resp.Error.Message)
@@ -690,6 +697,7 @@ func TestMCP_InvalidParams(t *testing.T) {
 	}
 	if parsed.Error == nil {
 		t.Fatal("expected error envelope")
+		return
 	}
 }
 
@@ -704,6 +712,7 @@ func TestMCP_PreservesID(t *testing.T) {
 	})
 	if resp.ID == nil {
 		t.Fatal("response id missing")
+		return
 	}
 	if *resp.ID != id {
 		t.Errorf("response id = %d, want %d", *resp.ID, id)

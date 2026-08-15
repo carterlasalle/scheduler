@@ -53,6 +53,113 @@ func countRecentOutcomes(ctx context.Context, db *sql.DB) map[string]int {
 	return out
 }
 
+// ProjectFailureRate is the per-project failure-rate breakdown for a single
+// project over a window of recent ticks. It appears in /api/v1/status under
+// the "projects_failure_rates" key (SCHED-GAP-018).
+type ProjectFailureRate struct {
+	Failed      int     `json:"failed"`
+	Total       int     `json:"total"`
+	FailureRate float64 `json:"failure_rate"`
+
+	// AutoDisableArmed reports whether this project currently meets the
+	// auto-disable condition (GAP-047): the feature is enabled
+	// (threshold > 0), the sample size reaches minTicks, and the failure
+	// rate is at or above the threshold. It mirrors the exact condition in
+	// internal/scheduler/alert_escalation.go CheckFailureRateAutoDisable.
+	AutoDisableArmed bool `json:"auto_disable_armed"`
+}
+
+// computeProjectFailureRates returns a per-project failure-rate breakdown
+// computed over the last `window` completed ticks per project. Only projects
+// with at least one tick in the window are included. "failed" counts both
+// 'failed' and 'timeout' statuses (both are waste — non-completed outcomes).
+// "total" is the number of ticks in the window with a non-null completed_at
+// (running/queued ticks are excluded). failure_rate = failed/total, rounded
+// to 4 decimal places.
+//
+// `threshold` and `minTicks` drive the AutoDisableArmed flag (GAP-047) and
+// mirror the auto-disable policy in alert_escalation.go: armed when
+// threshold > 0 && total >= minTicks && rate >= threshold, where rate is the
+// unrounded failed/total ratio (matching CheckFailureRateAutoDisable exactly).
+func computeProjectFailureRates(ctx context.Context, db *sql.DB, window int, threshold float64, minTicks int) map[string]ProjectFailureRate {
+	if window <= 0 {
+		window = 100
+	}
+	// Mirror CheckFailureRateAutoDisable's effective sample-size default.
+	if minTicks <= 0 {
+		minTicks = 50
+	}
+	out := map[string]ProjectFailureRate{}
+
+	// For each project, select the most recent `window` completed ticks and
+	// count how many are failed/timeout vs total. Using a correlated subquery
+	// with LIMIT inside a window function would be cleaner, but SQLite's
+	// LIMIT inside a subquery is well-supported and avoids the row_number()
+	// complexity. We do it in Go for clarity and to keep the query portable.
+	//
+	// DOGFOOD-009: only EXISTING projects are considered. A hard-deleted
+	// project (row purged from the projects table, e.g. eduos-e2e) leaves
+	// historical ticks behind; without the join those ticks resurfaced as
+	// ghost failure-rate entries (failure_rate=1.0, auto_disable_armed=true)
+	// that could never be cleared.
+	projects, err := db.QueryContext(ctx,
+		`SELECT DISTINCT t.project_name FROM ticks t
+		 JOIN projects p ON p.name = t.project_name
+		 WHERE t.completed_at IS NOT NULL`)
+	if err != nil {
+		return out
+	}
+	defer projects.Close()
+
+	var names []string
+	for projects.Next() {
+		var name string
+		if err := projects.Scan(&name); err == nil {
+			names = append(names, name)
+		}
+	}
+
+	for _, name := range names {
+		rows, err := db.QueryContext(ctx,
+			`SELECT status FROM ticks
+			 WHERE project_name = ? AND completed_at IS NOT NULL
+			 ORDER BY spawned_at DESC LIMIT ?`,
+			name, window)
+		if err != nil {
+			continue
+		}
+		var failed, total int
+		for rows.Next() {
+			var status string
+			if err := rows.Scan(&status); err != nil {
+				continue
+			}
+			total++
+			if status == "failed" || status == "timeout" {
+				failed++
+			}
+		}
+		rows.Close()
+		if total == 0 {
+			continue
+		}
+		rate := float64(failed) / float64(total)
+		// GAP-047: armed uses the unrounded rate, exactly like
+		// CheckFailureRateAutoDisable (which compares the raw ratio against
+		// the threshold before any display rounding).
+		armed := threshold > 0 && total >= minTicks && rate >= threshold
+		// Round to 4 decimal places for clean JSON output.
+		rate = float64(int(rate*10000)) / 10000
+		out[name] = ProjectFailureRate{
+			Failed:           failed,
+			Total:            total,
+			FailureRate:      rate,
+			AutoDisableArmed: armed,
+		}
+	}
+	return out
+}
+
 func getLatestTick(ctx context.Context, db *sql.DB, project string) (*database.Tick, error) {
 	row := db.QueryRowContext(ctx, `
 		SELECT id, project_name, COALESCE(session_id,'') as session_id, status,
@@ -235,6 +342,14 @@ var openapiSpec = []byte(`{
         }
       }
     },
+    "/api/v1/config": {
+      "get": {
+        "summary": "Resolved daemon configuration snapshot (three-layer: TOML < env vars < CLI flags)",
+        "responses": {
+          "200": {"description": "Active config — min_interval, max_concurrent, gateway.url, auto_disable_failure_rate, etc. The gateway key is masked (SCHED-GAP-034)."}
+        }
+      }
+    },
     "/api/v1/projects": {
       "get": {
         "summary": "List all projects",
@@ -270,6 +385,20 @@ var openapiSpec = []byte(`{
         },
         "responses": {
           "200": {"description": "Updated project"}
+        }
+      },
+      "delete": {
+        "summary": "Delete a project. confirm=true soft-deletes (enabled=false, row retained); confirm=true&purge=true permanently removes the row (DOGFOOD-009)",
+        "parameters": [
+          {"name": "name", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "confirm", "in": "query", "required": true, "schema": {"type": "string"}},
+          {"name": "purge", "in": "query", "required": false, "schema": {"type": "string"}, "description": "true = hard-delete the row permanently; requires confirm=true too; historical ticks are retained"}
+        ],
+        "responses": {
+          "200": {"description": "Project soft-deleted (enabled=false) or purged (row removed)"},
+          "400": {"description": "Missing confirm=true query param (or purge=true without confirm)"},
+          "404": {"description": "Project not found"},
+          "409": {"description": "Project is enabled — pause it first"}
         }
       }
     },

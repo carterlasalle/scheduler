@@ -24,13 +24,30 @@ import "time"
 // project is not backed off, and AC(b) (>50 consecutive failures impossible)
 // holds because backoff reaches the 2h cap after ~4 failures (≤12 attempts
 // per day per project).
+//
+// Reopened 2026-08-05: the original boost was FLAT (1e12 for every starving
+// project), so simultaneously starving projects tied on urgency and the
+// priority-desc tie-break handed every slot to the prio-10 starved cohort —
+// the prio-5 tier logged FAIRNESS every eval yet received zero spawn
+// attempts for 25-34h live. The boost is now MONOTONIC IN STARVATION AGE
+// (starvationBoostUrgencyFor): most-starved first, regardless of priority.
 
 const (
-	// starvationBoostUrgency is far above any organically reachable urgency
-	// (live fleet tops out ~12k), so a starving project always sorts first.
-	// Among several simultaneously starving projects the existing tie-breaks
-	// apply (priority desc, oldest attempt first).
+	// starvationBoostUrgency is the BASE of the fairness boost — far above
+	// any organically reachable urgency (live fleet tops out ~12k), so a
+	// starving project always sorts ahead of every non-starving project.
+	// Among several simultaneously starving projects the age term added by
+	// starvationBoostUrgencyFor decides (most-starved first); the
+	// priority-desc tie-break only fires for identical starvation ages.
 	starvationBoostUrgency = 1e12
+
+	// maxStarvationAge caps the starvation-age term added to the boost.
+	// 1e6s ≈ 11.6 days: at the cap the boosted value (1e12 + 1e6) is still
+	// >10^7× the highest organic urgency, and the float64 sum stays exact
+	// (2^53 ≈ 9e15). Two projects both starved past the cap tie and fall
+	// back to the standard tie-breaks — acceptable: with the age-monotonic
+	// boost in place no project should ever accumulate that much age.
+	maxStarvationAge = 1000000 * time.Second
 
 	// backoffCap is the maximum effective cooldown produced by failure
 	// backoff. 2h ⇒ at most 12 attempts/day/project at full backoff.
@@ -116,4 +133,40 @@ func isStarving(cooldownS, consecutiveFailures int, lastAttempt *time.Time, crea
 		return false
 	}
 	return elapsed > StarvationWindow(cooldownS)
+}
+
+// starvationAge returns how long a project has gone without a tick attempt,
+// using the same reference clock as isStarving (last attempt, falling back
+// to createdAt when it has never run). Floored at 0: a project with no
+// usable timestamp or a future timestamp (clock skew) reports age 0.
+func starvationAge(lastAttempt *time.Time, createdAt, now time.Time) time.Duration {
+	ref := createdAt
+	if lastAttempt != nil {
+		ref = *lastAttempt
+	}
+	if ref.IsZero() {
+		return 0
+	}
+	if d := now.Sub(ref); d > 0 {
+		return d
+	}
+	return 0
+}
+
+// starvationBoostUrgencyFor returns the fairness-boosted urgency for a
+// starving project: starvationBoostUrgency plus the starvation age in
+// seconds, capped at maxStarvationAge. The result is monotonic
+// non-decreasing in elapsed, so when several projects starve simultaneously
+// the MOST-starved one sorts first regardless of priority — the prio-10
+// starved cohort can no longer outvote the prio-5 tier on the priority-desc
+// tie-break (S-GAP-001 reopen, 2026-08-05). Even at the cap the sum
+// (1e12 + 1e6) remains >10^7× any organic urgency (~12k max live).
+func starvationBoostUrgencyFor(elapsed time.Duration) float64 {
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if elapsed > maxStarvationAge {
+		elapsed = maxStarvationAge
+	}
+	return starvationBoostUrgency + elapsed.Seconds()
 }

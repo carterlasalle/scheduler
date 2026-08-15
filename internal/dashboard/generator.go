@@ -42,6 +42,13 @@ type Generator struct {
 	duckbrainURL      string // optional; health panel probes its /health
 	healthClient      *http.Client
 	started           time.Time
+	spawnCounts       func() (httpCount, execCount int64) // optional; /health panel
+}
+
+// SetSpawnCounts wires a callback returning (http, exec) spawn counts since
+// restart, surfaced on the /health panel (upstream merge compatibility).
+func (g *Generator) SetSpawnCounts(fn func() (httpCount, execCount int64)) {
+	g.spawnCounts = fn
 }
 
 // NewGenerator creates a dashboard generator. Template is parsed at construction

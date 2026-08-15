@@ -22,13 +22,18 @@ func setupTestDB(t *testing.T) *sql.DB {
 			name TEXT PRIMARY KEY,
 			enabled INTEGER DEFAULT 1,
 			cooldown_s INTEGER DEFAULT 1800,
-			workdir TEXT DEFAULT ''
+			workdir TEXT DEFAULT '',
+			updated_at TEXT,
+			disabled_at TEXT,
+			disabled_by TEXT,
+			disabled_reason TEXT
 		);
 		CREATE TABLE IF NOT EXISTS ticks (
 			id TEXT PRIMARY KEY,
 			project_name TEXT,
 			status TEXT DEFAULT 'queued',
 			completed_at TEXT,
+			spawned_at TEXT,
 			started_at TEXT
 		);
 		CREATE TABLE IF NOT EXISTS events (
@@ -57,8 +62,8 @@ func insertProject(t *testing.T, db *sql.DB, name string, cooldown int) {
 
 func insertTick(t *testing.T, db *sql.DB, tickID, project, status string, completedAt time.Time) {
 	t.Helper()
-	_, err := db.Exec(`INSERT INTO ticks (id, project_name, status, completed_at) VALUES (?, ?, ?, ?)`,
-		tickID, project, status, completedAt.Format(time.RFC3339))
+	_, err := db.Exec(`INSERT INTO ticks (id, project_name, status, completed_at, spawned_at) VALUES (?, ?, ?, ?, ?)`,
+		tickID, project, status, completedAt.Format(time.RFC3339), completedAt.Format(time.RFC3339))
 	if err != nil {
 		t.Fatalf("insert tick %s: %v", tickID, err)
 	}
@@ -81,7 +86,7 @@ func TestAlertEscalator_CheckSchedulerHealth_NotEvaluating(t *testing.T) {
 	defer db.Close()
 
 	events := NewEventLogger(db)
-	escalator := NewAlertEscalator(db, events)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
 
 	err := escalator.CheckSchedulerHealth(context.Background(), time.Time{})
 	if err != nil {
@@ -100,7 +105,7 @@ func TestAlertEscalator_CheckSchedulerHealth_Stale(t *testing.T) {
 	defer db.Close()
 
 	events := NewEventLogger(db)
-	escalator := NewAlertEscalator(db, events)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
 
 	stale := time.Now().Add(-15 * time.Minute)
 	err := escalator.CheckSchedulerHealth(context.Background(), stale)
@@ -120,7 +125,7 @@ func TestAlertEscalator_CheckSchedulerHealth_Recent(t *testing.T) {
 	defer db.Close()
 
 	events := NewEventLogger(db)
-	escalator := NewAlertEscalator(db, events)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
 
 	recent := time.Now().Add(-1 * time.Minute)
 	err := escalator.CheckSchedulerHealth(context.Background(), recent)
@@ -145,7 +150,7 @@ func TestAlertEscalator_CheckStarvation(t *testing.T) {
 	insertTick(t, db, "tick-001", "test-proj", "completed", oldTick)
 
 	events := NewEventLogger(db)
-	escalator := NewAlertEscalator(db, events)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
 
 	err := escalator.CheckStarvation(context.Background())
 	if err != nil {
@@ -168,7 +173,7 @@ func TestAlertEscalator_CheckStarvation_RecentTick(t *testing.T) {
 	insertTick(t, db, "tick-002", "active-proj", "completed", recent)
 
 	events := NewEventLogger(db)
-	escalator := NewAlertEscalator(db, events)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
 
 	err := escalator.CheckStarvation(context.Background())
 	if err != nil {
@@ -177,6 +182,118 @@ func TestAlertEscalator_CheckStarvation_RecentTick(t *testing.T) {
 
 	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 0 {
 		t.Errorf("expected 0 MEDIUM events, got %d", n)
+	}
+}
+
+// TestAlertEscalator_CheckStarvation_Throttle proves SCHED-GAP-014: consecutive
+// CheckStarvation calls emit at most one MEDIUM event per starvationThrottleWindow
+// per project, even though the escalator is constructed fresh each time (as it
+// is in production at tick_process.go:134).
+func TestAlertEscalator_CheckStarvation_Throttle(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "starved-proj", 1800) // 2x cooldown = 1h
+	oldTick := time.Now().Add(-3 * time.Hour)  // well beyond 1h threshold
+	insertTick(t, db, "tick-old", "starved-proj", "completed", oldTick)
+
+	// First call — should emit (first crossing of the threshold).
+	events := NewEventLogger(db)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
+	if err := escalator.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #1: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 1 {
+		t.Fatalf("after first call: expected 1 MEDIUM event, got %d", n)
+	}
+
+	// Second call — fresh escalator (mirrors production), same project still
+	// starved. Throttle must suppress: still 1 event.
+	escalator2 := NewAlertEscalator(db, events, autoDisablePolicy{})
+	if err := escalator2.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #2: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 1 {
+		t.Errorf("after second call (throttled): expected 1 MEDIUM event, got %d", n)
+	}
+
+	// Third call — still throttled.
+	escalator3 := NewAlertEscalator(db, events, autoDisablePolicy{})
+	if err := escalator3.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #3: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 1 {
+		t.Errorf("after third call (throttled): expected 1 MEDIUM event, got %d", n)
+	}
+}
+
+// TestAlertEscalator_CheckStarvation_ThrottleExpires proves that after the
+// throttle window passes, a new starvation event IS emitted (not suppressed
+// forever). We simulate this by manually backdating the first event's
+// created_at to before the throttle window.
+func TestAlertEscalator_CheckStarvation_ThrottleExpires(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "expiring-proj", 1800) // 2x cooldown = 1h
+	oldTick := time.Now().Add(-3 * time.Hour)
+	insertTick(t, db, "tick-old", "expiring-proj", "completed", oldTick)
+
+	events := NewEventLogger(db)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
+	if err := escalator.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #1: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 1 {
+		t.Fatalf("after first call: expected 1 MEDIUM event, got %d", n)
+	}
+
+	// Backdate the emitted event to 31 minutes ago — just past the 30-min window.
+	_, err := db.Exec(`UPDATE events SET created_at = ? WHERE severity = 'MEDIUM' AND component = 'escalation'`,
+		time.Now().Add(-31*time.Minute).UTC().Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("backdate event: %v", err)
+	}
+
+	// Second call — throttle has expired, should emit again.
+	escalator2 := NewAlertEscalator(db, events, autoDisablePolicy{})
+	if err := escalator2.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #2: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 2 {
+		t.Errorf("after throttle expires: expected 2 MEDIUM events, got %d", n)
+	}
+}
+
+// TestAlertEscalator_CheckStarvation_ThrottleDistinctProjects proves the
+// throttle is per-project: two starved projects each emit once on the first
+// call, and neither emits again on the second call.
+func TestAlertEscalator_CheckStarvation_ThrottleDistinctProjects(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "proj-a", 1800)
+	insertProject(t, db, "proj-b", 1800)
+	oldTick := time.Now().Add(-3 * time.Hour)
+	insertTick(t, db, "tick-a", "proj-a", "completed", oldTick)
+	insertTick(t, db, "tick-b", "proj-b", "completed", oldTick)
+
+	events := NewEventLogger(db)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
+	if err := escalator.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #1: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 2 {
+		t.Fatalf("after first call: expected 2 MEDIUM events (one per project), got %d", n)
+	}
+
+	// Second call — both throttled.
+	escalator2 := NewAlertEscalator(db, events, autoDisablePolicy{})
+	if err := escalator2.CheckStarvation(context.Background()); err != nil {
+		t.Fatalf("CheckStarvation #2: %v", err)
+	}
+	if n := countEventsBySeverity(t, db, "MEDIUM"); n != 2 {
+		t.Errorf("after second call (throttled): expected 2 MEDIUM events, got %d", n)
 	}
 }
 
@@ -194,7 +311,7 @@ func TestAlertEscalator_CheckConsecutiveFailures(t *testing.T) {
 	}
 
 	events := NewEventLogger(db)
-	escalator := NewAlertEscalator(db, events)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
 
 	err := escalator.CheckConsecutiveFailures(context.Background())
 	if err != nil {
@@ -222,7 +339,7 @@ func TestAlertEscalator_CheckConsecutiveFailures_BrokenStreak(t *testing.T) {
 	insertTick(t, db, "f-4", "recovering-proj", "failed", now.Add(-1*time.Minute))
 
 	events := NewEventLogger(db)
-	escalator := NewAlertEscalator(db, events)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
 
 	err := escalator.CheckConsecutiveFailures(context.Background())
 	if err != nil {
@@ -268,7 +385,7 @@ func TestAlertEscalator_CheckDuplicateWorkdirs(t *testing.T) {
 	}
 
 	events := NewEventLogger(db)
-	escalator := NewAlertEscalator(db, events)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
 
 	if err := escalator.CheckDuplicateWorkdirs(context.Background()); err != nil {
 		t.Fatalf("CheckDuplicateWorkdirs: %v", err)
@@ -293,7 +410,7 @@ func TestAlertEscalator_RunAll(t *testing.T) {
 	defer db.Close()
 
 	events := NewEventLogger(db)
-	escalator := NewAlertEscalator(db, events)
+	escalator := NewAlertEscalator(db, events, autoDisablePolicy{})
 
 	// Recent eval — should not emit CRITICAL.
 	err := escalator.RunAll(context.Background(), time.Now().Add(-1*time.Minute))
@@ -301,4 +418,266 @@ func TestAlertEscalator_RunAll(t *testing.T) {
 		t.Fatalf("RunAll: %v", err)
 	}
 	// RunAll should not error even with no projects.
+}
+
+// --- CheckFailureRateAutoDisable (SCHED-GAP-018) -------------------------
+
+// helper: check if a project is enabled in the DB.
+func projectEnabled(t *testing.T, db *sql.DB, name string) bool {
+	t.Helper()
+	var enabled int
+	err := db.QueryRow(`SELECT enabled FROM projects WHERE name = ?`, name).Scan(&enabled)
+	if err != nil {
+		t.Fatalf("query enabled for %s: %v", name, err)
+	}
+	return enabled == 1
+}
+
+// TestAutoDisable_DisablesHighFailureProject: a project with 96% failure rate
+// over 100 ticks, threshold=0.95, min_ticks=50 → should be disabled + event.
+func TestAutoDisable_DisablesHighFailureProject(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "failing-proj", 1800)
+	now := time.Now()
+	// 96 failed ticks, 4 completed ticks = 96% failure rate over 100 ticks.
+	for i := 0; i < 96; i++ {
+		insertTick(t, db, "fail-"+string(rune('A'+i)), "failing-proj", "failed",
+			now.Add(-time.Duration(100-i)*time.Second))
+	}
+	for i := 0; i < 4; i++ {
+		insertTick(t, db, "ok-"+string(rune('A'+i)), "failing-proj", "completed",
+			now.Add(-time.Duration(4-i)*time.Second))
+	}
+
+	events := NewEventLogger(db)
+	policy := autoDisablePolicy{failureRate: 0.95, window: 100, minTicks: 50}
+	escalator := NewAlertEscalator(db, events, policy)
+
+	if err := escalator.CheckFailureRateAutoDisable(context.Background()); err != nil {
+		t.Fatalf("CheckFailureRateAutoDisable: %v", err)
+	}
+
+	if projectEnabled(t, db, "failing-proj") {
+		t.Error("expected failing-proj to be disabled")
+	}
+	if n := countEventsBySeverity(t, db, "HIGH"); n != 1 {
+		t.Errorf("expected 1 HIGH auto-disable event, got %d", n)
+	}
+	// GAP-044: auto-disable must stamp provenance (who/when/why).
+	var disabledBy, disabledAt, disabledReason string
+	if err := db.QueryRow(
+		`SELECT COALESCE(disabled_by,''), COALESCE(disabled_at,''), COALESCE(disabled_reason,'') FROM projects WHERE name = 'failing-proj'`,
+	).Scan(&disabledBy, &disabledAt, &disabledReason); err != nil {
+		t.Fatalf("read provenance: %v", err)
+	}
+	if disabledBy != "auto-disable" {
+		t.Errorf("disabled_by = %q, want \"auto-disable\"", disabledBy)
+	}
+	if disabledAt == "" {
+		t.Error("disabled_at empty — auto-disable must stamp a timestamp")
+	}
+	if !strings.Contains(disabledReason, "96.0%") {
+		t.Errorf("disabled_reason = %q, want failure stats including 96.0%%", disabledReason)
+	}
+}
+
+// TestAutoDisable_NoOpBelowThreshold: 80% failure rate, threshold=0.95 → no-op.
+func TestAutoDisable_NoOpBelowThreshold(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "borderline", 1800)
+	now := time.Now()
+	for i := 0; i < 80; i++ {
+		insertTick(t, db, "fail-"+string(rune('A'+i)), "borderline", "failed",
+			now.Add(-time.Duration(80-i)*time.Second))
+	}
+	for i := 0; i < 20; i++ {
+		insertTick(t, db, "ok-"+string(rune('A'+i)), "borderline", "completed",
+			now.Add(-time.Duration(20-i)*time.Second))
+	}
+
+	events := NewEventLogger(db)
+	policy := autoDisablePolicy{failureRate: 0.95, window: 100, minTicks: 50}
+	escalator := NewAlertEscalator(db, events, policy)
+
+	if err := escalator.CheckFailureRateAutoDisable(context.Background()); err != nil {
+		t.Fatalf("CheckFailureRateAutoDisable: %v", err)
+	}
+
+	if !projectEnabled(t, db, "borderline") {
+		t.Error("expected borderline to remain enabled (below threshold)")
+	}
+	if n := countEventsBySeverity(t, db, "HIGH"); n != 0 {
+		t.Errorf("expected 0 HIGH events, got %d", n)
+	}
+}
+
+// TestAutoDisable_NoOpBelowMinTicks: failure rate above threshold but only
+// 30 ticks total (< min_ticks=50) → no-op.
+func TestAutoDisable_NoOpBelowMinTicks(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "small-sample", 1800)
+	now := time.Now()
+	// 29 failures + 1 completed = 96.7% but only 30 ticks total.
+	for i := 0; i < 29; i++ {
+		insertTick(t, db, "fail-"+string(rune('A'+i)), "small-sample", "failed",
+			now.Add(-time.Duration(30-i)*time.Second))
+	}
+	insertTick(t, db, "ok-1", "small-sample", "completed", now)
+
+	events := NewEventLogger(db)
+	policy := autoDisablePolicy{failureRate: 0.95, window: 100, minTicks: 50}
+	escalator := NewAlertEscalator(db, events, policy)
+
+	if err := escalator.CheckFailureRateAutoDisable(context.Background()); err != nil {
+		t.Fatalf("CheckFailureRateAutoDisable: %v", err)
+	}
+
+	if !projectEnabled(t, db, "small-sample") {
+		t.Error("expected small-sample to remain enabled (below min_ticks)")
+	}
+	if n := countEventsBySeverity(t, db, "HIGH"); n != 0 {
+		t.Errorf("expected 0 HIGH events (below min_ticks), got %d", n)
+	}
+}
+
+// TestAutoDisable_FeatureOff: threshold=0 → no-op even with 100% failure.
+func TestAutoDisable_FeatureOff(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "all-failing", 1800)
+	now := time.Now()
+	for i := 0; i < 100; i++ {
+		insertTick(t, db, "fail-"+string(rune('A'+i)), "all-failing", "failed",
+			now.Add(-time.Duration(100-i)*time.Second))
+	}
+
+	events := NewEventLogger(db)
+	policy := autoDisablePolicy{failureRate: 0} // feature off
+	escalator := NewAlertEscalator(db, events, policy)
+
+	if err := escalator.CheckFailureRateAutoDisable(context.Background()); err != nil {
+		t.Fatalf("CheckFailureRateAutoDisable: %v", err)
+	}
+
+	if !projectEnabled(t, db, "all-failing") {
+		t.Error("expected all-failing to remain enabled (feature off)")
+	}
+	if n := countEventsBySeverity(t, db, "HIGH"); n != 0 {
+		t.Errorf("expected 0 HIGH events (feature off), got %d", n)
+	}
+}
+
+// TestAutoDisable_SkipsAlreadyDisabled: disabled project with 100% failure
+// rate → skipped (no event, stays disabled).
+func TestAutoDisable_SkipsAlreadyDisabled(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "already-off", 1800)
+	_, err := db.Exec(`UPDATE projects SET enabled = 0 WHERE name = 'already-off'`)
+	if err != nil {
+		t.Fatalf("disable project: %v", err)
+	}
+	now := time.Now()
+	for i := 0; i < 100; i++ {
+		insertTick(t, db, "fail-"+string(rune('A'+i)), "already-off", "failed",
+			now.Add(-time.Duration(100-i)*time.Second))
+	}
+
+	events := NewEventLogger(db)
+	policy := autoDisablePolicy{failureRate: 0.95, window: 100, minTicks: 50}
+	escalator := NewAlertEscalator(db, events, policy)
+
+	if err := escalator.CheckFailureRateAutoDisable(context.Background()); err != nil {
+		t.Fatalf("CheckFailureRateAutoDisable: %v", err)
+	}
+
+	if projectEnabled(t, db, "already-off") {
+		t.Error("already-disabled project should not be re-enabled")
+	}
+	if n := countEventsBySeverity(t, db, "HIGH"); n != 0 {
+		t.Errorf("expected 0 HIGH events (already disabled), got %d", n)
+	}
+}
+
+// TestAutoDisable_WindowBounds: with a small window (e.g. 10), only the last
+// 10 ticks matter — a project that was failing early but recently recovered
+// should NOT be disabled.
+func TestAutoDisable_WindowBounds(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "recovered", 1800)
+	now := time.Now()
+	// 90 old failures (outside the window of 10).
+	for i := 0; i < 90; i++ {
+		insertTick(t, db, "old-fail-"+string(rune('A'+i)), "recovered", "failed",
+			now.Add(-time.Duration(100-i)*time.Minute))
+	}
+	// 10 recent successes (inside the window of 10).
+	for i := 0; i < 10; i++ {
+		insertTick(t, db, "recent-ok-"+string(rune('A'+i)), "recovered", "completed",
+			now.Add(-time.Duration(10-i)*time.Second))
+	}
+
+	events := NewEventLogger(db)
+	// min_ticks=5 so the 10 recent ticks pass the sample-size guard; window=10.
+	policy := autoDisablePolicy{failureRate: 0.50, window: 10, minTicks: 5}
+	escalator := NewAlertEscalator(db, events, policy)
+
+	if err := escalator.CheckFailureRateAutoDisable(context.Background()); err != nil {
+		t.Fatalf("CheckFailureRateAutoDisable: %v", err)
+	}
+
+	// The 10 most recent ticks are all completed → 0% failure rate in window.
+	if !projectEnabled(t, db, "recovered") {
+		t.Error("expected recovered to remain enabled (window excludes old failures)")
+	}
+	if n := countEventsBySeverity(t, db, "HIGH"); n != 0 {
+		t.Errorf("expected 0 HIGH events, got %d", n)
+	}
+}
+
+// TestAutoDisable_EventDetails verifies the HIGH event contains the expected
+// detail fields.
+func TestAutoDisable_EventDetails(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	insertProject(t, db, "doomed", 1800)
+	now := time.Now()
+	for i := 0; i < 100; i++ {
+		insertTick(t, db, "fail-"+string(rune('A'+i)), "doomed", "failed",
+			now.Add(-time.Duration(100-i)*time.Second))
+	}
+
+	events := NewEventLogger(db)
+	policy := autoDisablePolicy{failureRate: 0.95, window: 100, minTicks: 50}
+	escalator := NewAlertEscalator(db, events, policy)
+
+	if err := escalator.CheckFailureRateAutoDisable(context.Background()); err != nil {
+		t.Fatalf("CheckFailureRateAutoDisable: %v", err)
+	}
+
+	var details string
+	err := db.QueryRow(`SELECT details FROM events WHERE severity = 'HIGH' AND component = 'auto-disable'`).Scan(&details)
+	if err != nil {
+		t.Fatalf("query auto-disable event: %v", err)
+	}
+	// Verify key fields are present in the JSON details.
+	for _, key := range []string{`"project"`, `"failure_rate"`, `"failed"`, `"total"`, `"window"`, `"threshold"`} {
+		if !strings.Contains(details, key) {
+			t.Errorf("auto-disable event details missing %s: %s", key, details)
+		}
+	}
+	if !strings.Contains(details, `"doomed"`) {
+		t.Errorf("auto-disable event details should reference project 'doomed': %s", details)
+	}
 }

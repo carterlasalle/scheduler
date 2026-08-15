@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,6 +57,7 @@ func TestNewDuckBrainSync(t *testing.T) {
 	}
 	if s.httpClient == nil {
 		t.Fatal("httpClient is nil")
+		return
 	}
 	if s.httpClient.Timeout != 10*time.Second {
 		t.Errorf("httpClient.Timeout = %v, want 10s", s.httpClient.Timeout)
@@ -139,6 +141,97 @@ func TestPostMemory_NetworkError(t *testing.T) {
 	err = s.postMemory(ctx, "/key", "config", "val")
 	if err == nil {
 		t.Fatal("expected network error, got nil")
+	}
+}
+
+func TestPostMemory_ChangeDetection(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	var posts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	s := NewDuckBrainSync(db, "test-ns", srv.URL)
+	ctx := context.Background()
+
+	status := projectStatus{
+		Name: "p1", Weight: 10, Priority: 5, Enabled: true,
+		CooldownS: 900, DecayRate: 1.0, Model: "m", Provider: "p",
+		LastTick: "2026-08-01T00:00:00Z", LastTickStart: "2026-08-01T00:00:00Z",
+		SyncedAt: "2026-08-05T18:00:00Z",
+	}
+
+	// First post always goes through.
+	if err := s.postMemory(ctx, "/fleet/projects/p1/status", "config", status); err != nil {
+		t.Fatalf("first postMemory: %v", err)
+	}
+	if got := posts.Load(); got != 1 {
+		t.Fatalf("posts after first = %d, want 1", got)
+	}
+
+	// Same payload with only synced_at changed → SKIPPED (no POST).
+	status.SyncedAt = "2026-08-05T18:05:00Z"
+	if err := s.postMemory(ctx, "/fleet/projects/p1/status", "config", status); err != nil {
+		t.Fatalf("unchanged postMemory: %v", err)
+	}
+	if got := posts.Load(); got != 1 {
+		t.Fatalf("posts after unchanged retry = %d, want 1 (dedupe failed)", got)
+	}
+
+	// A real field change → posted again.
+	status.CooldownS = 7200
+	if err := s.postMemory(ctx, "/fleet/projects/p1/status", "config", status); err != nil {
+		t.Fatalf("changed postMemory: %v", err)
+	}
+	if got := posts.Load(); got != 2 {
+		t.Fatalf("posts after changed payload = %d, want 2", got)
+	}
+}
+
+func TestPostMemory_FailureNotCached(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	defer db.Close()
+
+	var posts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if posts.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"boom"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	s := NewDuckBrainSync(db, "test-ns", srv.URL)
+	ctx := context.Background()
+
+	status := projectStatus{
+		Name: "p1", Weight: 10, Priority: 5, Enabled: true,
+		CooldownS: 900, DecayRate: 1.0, Model: "m", Provider: "p",
+		SyncedAt: "2026-08-05T18:00:00Z",
+	}
+
+	// First attempt fails — must NOT be recorded as synced.
+	if err := s.postMemory(ctx, "/fleet/projects/p1/status", "config", status); err == nil {
+		t.Fatal("expected error on first (500) post, got nil")
+	}
+	// Identical payload retried after failure → must POST again.
+	if err := s.postMemory(ctx, "/fleet/projects/p1/status", "config", status); err != nil {
+		t.Fatalf("retry postMemory: %v", err)
+	}
+	if got := posts.Load(); got != 2 {
+		t.Fatalf("posts = %d, want 2 (failed write must not be cached as synced)", got)
 	}
 }
 
@@ -741,7 +834,7 @@ func TestRun_StartsAndStops(t *testing.T) {
 		close(runDone)
 	}()
 
-	// Wait for the initial syncOnce + several ticks.
+	// Wait for the initial syncOnce + ticks to run.
 	time.Sleep(500 * time.Millisecond)
 
 	cancel()
@@ -753,124 +846,13 @@ func TestRun_StartsAndStops(t *testing.T) {
 		t.Fatal("Run did not stop within 2s of cancel")
 	}
 
-	// Project p1's state never changes across ticks, so only the first
-	// cycle should actually POST (fleet summary + project status +
-	// namespace summary = 3); every later tick's identical content must be
-	// deduped, not resent (duckbrain-sync-dedup regression guard — before the fix this
-	// grew unboundedly with every tick).
+	// New contract (change-detection): the initial syncOnce posts fleet
+	// summary + 1 project status + namespace summary = 3; every later cycle
+	// finds the payloads unchanged (synced_at stripped from the hash) and
+	// posts nothing. Ticks firing is proven by Run returning promptly on
+	// cancel; the dedupe itself is covered by TestPostMemory_ChangeDetection.
 	if callCount != 3 {
-		t.Errorf("callCount = %d, want 3 (initial cycle only; later ticks should be deduped)", callCount)
-	}
-}
-
-func TestSyncOnce_DedupSkipsUnchangedAcrossCycles(t *testing.T) {
-	db, err := database.InitDB(":memory:")
-	if err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	defer db.Close()
-
-	insertProject(t, db, "p1", "r1", "w1", 1)
-	if _, err := db.Exec(`INSERT INTO namespaces (id, weight, reserved, hard_cap, enabled) VALUES ('ns1', 10, 1, 100, 1)`); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	ctx := context.Background()
-	if err := database.LogEvent(ctx, db, &database.Event{
-		Severity:  database.SeverityInfo,
-		Component: "sync",
-		Message:   "sync cycle event",
-	}); err != nil {
-		t.Fatalf("LogEvent: %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO ticks (id, project_name, status, created_at) VALUES ('p1-2026-07-31-12-00-00', 'p1', 'completed', ?)`, time.Now().UTC().Format(time.RFC3339)); err != nil {
-		t.Fatalf("insert tick: %v", err)
-	}
-
-	var callCount int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	s := NewDuckBrainSync(db, "test-ns", srv.URL)
-
-	s.syncOnce(ctx)
-	if callCount != 6 {
-		t.Fatalf("after first cycle: callCount = %d, want 6", callCount)
-	}
-
-	s.syncOnce(ctx)
-	if callCount != 6 {
-		t.Errorf("after second cycle (unchanged data): callCount = %d, want still 6 (all reposts should be deduped)", callCount)
-	}
-
-	// Change project weight — that key's content must be re-synced.
-	if _, err := db.Exec(`UPDATE projects SET weight = 55 WHERE name = 'p1'`); err != nil {
-		t.Fatalf("update project: %v", err)
-	}
-	s.syncOnce(ctx)
-	if callCount != 7 {
-		t.Errorf("after third cycle (project weight changed): callCount = %d, want 7 (only the changed key resyncs)", callCount)
-	}
-}
-
-func TestPostMemoryBody_RetriesOn429ThenSucceeds(t *testing.T) {
-	db, err := database.InitDB(":memory:")
-	if err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	defer db.Close()
-
-	var attempts int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		if attempts <= 2 {
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	s := NewDuckBrainSync(db, "test-ns", srv.URL)
-	ctx := context.Background()
-
-	err = s.postMemory(ctx, "/key", "config", "val")
-	if err != nil {
-		t.Fatalf("postMemory: %v", err)
-	}
-	if attempts != 3 {
-		t.Errorf("attempts = %d, want 3 (2 rate-limited + 1 success)", attempts)
-	}
-}
-
-func TestPostMemoryBody_GivesUpAfter429Retries(t *testing.T) {
-	db, err := database.InitDB(":memory:")
-	if err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	defer db.Close()
-
-	var attempts int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
-	defer srv.Close()
-
-	s := NewDuckBrainSync(db, "test-ns", srv.URL)
-	ctx := context.Background()
-
-	err = s.postMemory(ctx, "/key", "config", "val")
-	if err == nil {
-		t.Fatal("expected error after exhausting 429 retries, got nil")
-	}
-	if !strings.Contains(err.Error(), "429") {
-		t.Errorf("error should mention 429, got: %v", err)
-	}
-	if attempts != maxRateLimitRetries+1 {
-		t.Errorf("attempts = %d, want %d (initial + %d retries)", attempts, maxRateLimitRetries+1, maxRateLimitRetries)
+		t.Errorf("callCount = %d, want 3 (initial syncOnce; unchanged payloads dedupe on later cycles)", callCount)
 	}
 }
 

@@ -13,10 +13,10 @@ A single Go binary that replaces dozens of static cron jobs with a dynamic, prio
 Instead of 33 cron jobs like `*/120 * * * * hermes chat -q "foreman tick for project X"`, you run ONE binary that:
 
 - **Knows all your projects** — weight, priority, cooldown, model, provider
-- **Evaluates every 60 seconds** — computes urgency for each project
+- **Evaluates on demand** — event-driven (startup, slot-freed debounce, or manual `POST /api/v1/evaluate`) with a 30s min-interval and a 5-min eval-stall watchdog
 - **Packs greedily** — fills a weight budget with the most urgent projects
 - **Spawns foremen via HTTP** — sends prompts to the Hermes gateway API (`POST /v1/responses`) instead of per-process `hermes chat`. Zero subprocess overhead, zero MCP duplication per tick
-- **Falls back gracefully** — if the gateway is unreachable, exec.Command(`hermes`, ...) handles it
+- **Falls back gracefully** — if the gateway is unreachable, exec.Command(`hermes`, ...) handles it. **Note:** exec fallback is DISABLED by default (`--no-exec-fallback` defaults to `true` for safety); pass `--no-exec-fallback=false` to re-enable it.
 - **Tracks outcomes** — every tick is recorded (queued → running → completed/failed)
 - **Exposes control** — REST API, MCP, dashboard, DuckBrain sync
 - **Auto-approves** — scheduler agents send `require_approval: false` via the gateway API, so foremen run autonomously without pausing for user confirmation. User-facing chats (Telegram, Discord) keep approvals enabled.
@@ -29,7 +29,7 @@ This guide takes you from zero to a running scheduler with your existing cron jo
 
 ### 1. Prerequisites
 
-- **Go 1.23+** — `go version`
+- **Go 1.26+** — `go version`
 - **Hermes gateway** running with API server enabled — `curl http://127.0.0.1:8642/health`
 - **SQLite3** — `sqlite3 --version`
 - **Existing cron jobs** in Hermes (the scheduler imports from `~/.hermes/cron/jobs.json`)
@@ -106,6 +106,21 @@ sudo systemctl enable --now coding-hermes-scheduler
 sudo systemctl status coding-hermes-scheduler
 ```
 
+The gateway API key is loaded from a 0600 env file (`/etc/coding-hermes/gateway.env` →
+`API_SERVER_KEY=...`, template: `deploy/gateway.env.example`) via `EnvironmentFile`;
+`cmd/schedulerd/main.go` defaults `--gateway-key` to `$API_SERVER_KEY`. **Never pass
+`--gateway-key` on the command line** — argv is world-readable via `ps aux` (GAP-038).
+
+### Local layout note (double nesting)
+
+This repo's canonical checkout on the fleet host lives at
+`/home/kara/coding-hermes-scheduler/coding-herms-scheduler/` (typo'd double
+nesting — the outer `/home/kara/coding-hermes-scheduler/` directory is NOT the
+repo; it holds only the outer `.coding-hermes/tasks.md` pointer and previously
+a stale `schedulerd` binary, removed 2026-08-13). Build and run from the inner
+checkout: `bin/schedulerd` (the systemd unit builds it via `ExecStartPre`).
+`repo_url` for the repo is `github.com/coding-hermes/scheduler` (GAP-039/040).
+
 ### Dedicated Gateway (recommended for production)
 
 For production fleets, run the scheduler on a dedicated Hermes gateway instance (separate cgroup, isolated MCPs, independent restart cycle). See [deploy/gateway-setup.md](deploy/gateway-setup.md) for full setup instructions.
@@ -120,11 +135,16 @@ For production fleets, run the scheduler on a dedicated Hermes gateway instance 
 
 ### What's Happening
 
-Every 60 seconds the scheduler:
+The scheduler evaluates on demand — at startup, when a slot frees up, or via
+manual `POST /api/v1/evaluate` (event-driven; 30s minimum interval). On each
+evaluation it:
 1. Computes urgency for each project (based on priority + time since last run)
 2. Packs the most urgent projects into a weight budget (default 100)
 3. Spawns foreman ticks via the Hermes gateway API
 4. Records outcomes (queued → running → completed/failed)
+
+A 5-minute eval-stall watchdog forces re-evaluation when the fleet sits idle,
+so cooldown-expired projects don't go unscheduled (GAP-042).
 
 You can monitor, pause, or adjust any project through the dashboard, REST API, or MCP tools.
 
@@ -142,10 +162,10 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 │              SCHEDULER (Go binary)            │
 │                                               │
 │  /         → Dashboard (dark theme HTML)      │
-│  /api/v1/  → REST API (15 endpoints)          │
+│  /api/v1/  → REST API (16 routes)             │
 │  /mcp      → MCP server (14 tools)            │
 │                                               │
-│  Eval Loop (60s):                             │
+│  Eval Loop (event-driven):                    │
 │    Urgency → Pack → Spawn → Track             │
 │                                               │
 │  SQLite: projects, ticks, events              │
@@ -158,18 +178,22 @@ You can monitor, pause, or adjust any project through the dashboard, REST API, o
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/` | Fleet dashboard (HTML) |
-| GET | `/api/v1/health` | Health check |
-| GET | `/api/v1/status` | Fleet status and budget |
-| GET | `/api/v1/projects` | List all projects |
-| GET | `/api/v1/projects/:name` | Get project details |
-| PUT | `/api/v1/projects/:name` | Update project config |
-| POST | `/api/v1/projects/:name/pause` | Pause a project |
-| POST | `/api/v1/projects/:name/resume` | Resume a project |
-| GET | `/api/v1/ticks` | List recent ticks |
-| GET | `/api/v1/ticks/:id` | Get tick details |
-| GET | `/api/v1/events` | List event log |
-| POST | `/api/v1/evaluate` | Force evaluation cycle |
+| GET | `/` | Fleet dashboard (full HTML page) |
+| GET | `/dashboard/partial` | htmx partial: project table refresh |
+| GET | `/projects/{name}` | Per-project detail page |
+| GET | `/queue` | Global queue view |
+| GET | `/ticks?page=N` | Paginated tick history |
+| GET | `/namespaces/{id}` | Namespace drill-down |
+| GET | `/health` | Dashboard health panel |
+| GET | `/api/v1/health` | Machine health check (JSON) |
+| GET | `/api/v1/status` | Fleet status summary (JSON) |
+| GET/POST | `/api/v1/projects` | List/manage projects |
+| GET/POST | `/api/v1/namespaces` | List/create namespaces |
+| GET | `/api/v1/ticks` | List ticks |
+| GET | `/api/v1/events` | List event log (SSE streaming supported) |
+| POST | `/api/v1/evaluate` | Trigger re-evaluation |
+| POST | `/api/v1/pause` | Pause scheduling |
+| POST | `/api/v1/resume` | Resume scheduling |
 | POST | `/mcp` | MCP JSON-RPC endpoint |
 
 ---
@@ -207,12 +231,12 @@ How frequently a project runs. Mapped to interval via geometric curve:
 interval = min_interval × (max_interval / min_interval) ^ ((priority-1) / (levels-1))
 ```
 
-| Priority | Interval (min=20m, max=24h) |
+| Priority | Interval (min=30s, max=24h) |
 |----------|----------------------------|
-| 10 | 20 minutes |
-| 8 | 59 minutes |
-| 5 | 5 hours |
-| 3 | 14.8 hours |
+| 10 | 30 seconds |
+| 8 | ~3 minutes |
+| 5 | ~42 minutes |
+| 3 | ~4.1 hours |
 | 1 | 24 hours |
 
 ### Urgency
@@ -227,6 +251,32 @@ Higher urgency projects get picked first.
 
 Default 900s between successive ticks for the same project.
 
+### Cooldown Policy (fleet-cooldown-policy.py)
+
+Fleet-wide cooldown normalization is governed by the ops script
+`~/.hermes/scripts/fleet-cooldown-policy.py` (not part of this repo — it lives
+in the Hermes ops home; run `python3 ~/.hermes/scripts/fleet-cooldown-policy.py`
+for a dry run, `--apply` to write). The script:
+
+- Reads the live SQLite state first (`GET /api/v1/projects` equivalent), then
+  regenerates `~/.hermes/fleet.toml` so every `[[projects]]` entry's
+  `cooldown_s` matches the daemon's current value, and optionally PUTs
+  normalized cooldowns back to the API.
+- Honors the `ELEVATED_PINS` whitelist (e.g. `h3=21600`, `warpfs=43200`):
+  projects with an operator-set pin are never written below their canonical
+  cooldown (SCHED-GAP-012), no matter what the SQLite state says.
+- Is the **only** writer of `fleet.toml`. `fleet.toml` pins are durable across
+  daemon restarts (loader re-pins existing projects at every startup), while
+  an API `PUT /api/v1/projects/{name}` cooldown change is durable only within
+  the daemon session — the next policy run normalizes it back unless the
+  project has an ELEVATED_PINS entry.
+
+**Override procedure:** to pin a project's cooldown permanently, add it to
+`ELEVATED_PINS` in `~/.hermes/scripts/fleet-cooldown-policy.py` (and set the
+pin in `fleet.toml`), then run the script with `--apply`. The pin survives
+policy runs and daemon restarts. See `docs/integration.md` for the full
+authority model.
+
 ---
 
 ## Configuration
@@ -237,31 +287,46 @@ Default 900s between successive ticks for the same project.
   -db ~/.hermes/coding-hermes/scheduler.db \
   -foreman-home ~/.hermes/foreman \
   -gateway-url http://127.0.0.1:8642 \
-  -min-interval 20m \
+  -min-interval 30s \
   -max-interval 24h \
   -num-levels 10 \
   -budget 100 \
-  -max-concurrent 8
+  -max-concurrent 10
 ```
 
 ### Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-listen` | `127.0.0.1:9090` | HTTP listen address |
 | `-db` | `~/.hermes/coding-hermes/scheduler.db` | SQLite database path |
-| `-foreman-home` | `~/.hermes/foreman` | HERMES_HOME for foreman sessions |
-| `-gateway-url` | `http://127.0.0.1:8642` | Hermes gateway API URL |
-| `-gateway-key` | `$API_SERVER_KEY` | Hermes gateway API key |
-| `-budget` | `100` | Concurrency weight budget |
-| `-max-concurrent` | `8` | Max concurrent foreman ticks |
-| `-min-interval` | `20m` | Fastest tick interval (priority 10) |
-| `-max-interval` | `24h` | Slowest tick interval (priority 1) |
+| `-listen` | `127.0.0.1:9090` | HTTP listen address |
+| `-min-interval` | `30s` | Fastest tick interval |
+| `-max-interval` | `24h` | Slowest tick interval |
 | `-num-levels` | `10` | Number of priority levels |
-| `-tick-timeout` | `2h` | Maximum tick duration before kill |
-| `-config` | (none) | Path to TOML fleet config file |
+| `-budget` | `100` | Weight budget |
+| `-max-concurrent` | `10` | Max concurrent foremen |
 | `-namespace-mode` | `false` | Enable multi-namespace scheduling |
+| `-tick-timeout` | `2h` | Maximum tick duration before timeout (2h) |
 | `-test-verify` | `0` | Run N-cycle correctness verification and exit |
+| `-duckbrain-ns` | `coding-hermes` | DuckBrain namespace for sync |
+| `-duckbrain-url` | `http://localhost:3000` | DuckBrain HTTP server URL |
+| `-simulate` | `false` | Run in dry-run/simulation mode (no real spawning) |
+| `-sim-success` | `0.85` | Simulated success rate (0.0-1.0) |
+| `-sim-count` | `0` | Generate N simulated ticks and exit (0 = run loop) |
+| `-gateway-url` | `http://127.0.0.1:8642` | Hermes gateway API URL (empty = use exec.Command) |
+| `-gateway-key` | `$API_SERVER_KEY` | Hermes gateway API key |
+| `-no-exec-fallback` | `true` | Disable exec.Command fallback when gateway fails (default true for safety) |
+| `-foreman-home` | `~/.hermes/foreman` | HERMES_HOME path for foreman sessions |
+| `-sim-setup` | `false` | Create test fixture with 13 dry-run projects (12 enabled + 1 disabled) |
+| `-sim-ticks` | `10` | Number of evaluation ticks to run in sim-setup mode |
+| `-config` | (none) | Path to TOML fleet config file |
+| `-failure-window` | `100` | Number of recent ticks per project for `/api/v1/status` per-project failure-rate breakdown |
+| `-auto-disable-failure-rate` | `0` | Per-project failure-rate threshold (0.0–1.0) for auto-disable; `0` = off |
+| `-auto-disable-window` | `100` | Ticks per project over which auto-disable failure rate is computed |
+| `-auto-disable-min-ticks` | `50` | Minimum ticks in window before auto-disable can fire |
+| `-log-file` | `~/.hermes/coding-hermes/scheduler.log` | Path to append structured tick logs (JSON lines); empty disables |
+| `-show-config` | `false` | Print resolved config (CLI + env) as TOML and exit |
+| `-schema` | `false` | Output JSON Schema for schedulerd.toml and exit |
 
 Declarative fleet seeding via TOML: `./bin/schedulerd --config fleet.example.toml`
 
@@ -330,7 +395,7 @@ docs/             # Fleet status, architecture docs
 
 ## Fleet & Skills
 
-See [docs/fleet.md](docs/fleet.md) for current H3 fleet status — 27 projects, thread mappings, cooldowns, skills map, provider rules.
+See [docs/fleet.md](docs/fleet.md) for current fleet status — regenerated from the live API (`python3 docs/regenerate_fleet.py`), with project counts, thread mappings, cooldowns, skills map, provider rules.
 
 Skills are maintained in `~/.hermes/skills/coding-hermes-*/` and loaded by the scheduler per-project.
 
@@ -353,7 +418,7 @@ created disabled — resume them explicitly.
 | `/api/v1/health` | GET | Daemon health, uptime, active ticks |
 | `/api/v1/status` | GET | Full fleet status (projects, budget, namespaces) |
 | `/api/v1/projects` | GET/POST | List all or register a new project |
-| `/api/v1/projects/{name}` | GET/PUT/DELETE | Read, update, or remove a project |
+| `/api/v1/projects/{name}` | GET/PUT/DELETE | Read, update, soft-delete (`?confirm=true`) or purge (`?confirm=true&purge=true`) a project |
 | `/api/v1/ticks` | GET | Tick history with filtering |
 | `/api/v1/ticks/{id}` | GET | Single tick detail |
 | `/api/v1/events` | GET/STREAM | Event log (SSE streaming supported) |
@@ -363,28 +428,35 @@ created disabled — resume them explicitly.
 | `/api/v1/namespaces` | GET/POST | List or create namespaces |
 | `/api/v1/namespaces/{id}` | GET/PUT/DELETE | Read, update, or remove a namespace |
 
+**DELETE `/api/v1/projects/{name}` semantics (DOGFOOD-009):** `DELETE` is a
+soft delete — it requires `?confirm=true` (else `400`) and refuses enabled
+projects with `409` (pause first). On success it returns `200
+{"status":"deleted","project":name}`: the row is RETAINED (still listed by
+`GET /api/v1/projects` and `GET /projects/{name}`), stamped `enabled=false`,
+`disabled_by='api-delete'`, `disabled_reason='soft-deleted via DELETE
+?confirm=true'`, `disabled_at=<now>`. Soft-deleted rows keep their historical
+ticks referentially valid and remain visible in listings. To permanently
+remove the row instead, add `?purge=true` (i.e.
+`DELETE /api/v1/projects/{name}?confirm=true&purge=true`) — purge has its own
+confirm requirement (`?purge=true` alone is refused with `400`), still refuses
+enabled projects with `409`, and on success returns `200
+{"status":"purged","project":name}` with the row permanently removed from the
+projects table. Historical ticks are retained (they reference projects by
+name string) but no longer contribute to `/api/v1/status`
+`projects_failure_rates`, which only includes existing projects.
+
 ## MCP Server
 
-MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via:
-
-| Tool | Description |
-|------|-------------|
-| `list_projects` | List all projects with status, priority, weight |
-| `get_project` | Get a single project by name |
-| `enable_project` / `disable_project` | Toggle project on/off |
-| `set_priority` / `set_weight` | Adjust scheduling parameters |
-| `get_ticks` | Recent tick history for a project |
-| `pause_scheduler` / `resume_scheduler` | Pause/resume the eval loop |
-| `force_evaluate` | Trigger immediate evaluation |
+MCP JSON-RPC at `http://127.0.0.1:9090/mcp`. AI agents can control the scheduler via the 14 `fleet_*` tools listed in [MCP Tools](#mcp-tools):
 
 ```json
 // Example: List all projects via MCP
-{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_projects","arguments":{}}}
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"fleet_projects","arguments":{}}}
 ```
 
 ## Dashboard
 
-Live HTML dashboard at `http://127.0.0.1:9090/` — auto-refreshes every 60 seconds.
+Live HTML dashboard at `http://127.0.0.1:9090/` — htmx-powered live updates: fleet overview and health panel every 10s, queue and tick history every 30s.
 
 ![Dashboard](assets/dashboard.png)
 

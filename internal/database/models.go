@@ -5,24 +5,34 @@ import "encoding/json"
 // Project is a single managed codebase the scheduler may spawn ticks against.
 // Field ordering matches the projects table column order for scan ergonomics.
 type Project struct {
-	Name           string  `json:"name"`            // PRIMARY KEY — also the DuckBrain project key
-	RepoURL        string  `json:"repo_url"`        // git clone URL
-	Workdir        string  `json:"workdir"`         // absolute path to the working copy on this host
-	Weight         int     `json:"weight"`          // 1..100 — weight budget consumed per tick (default 10)
-	Priority       int     `json:"priority"`        // 1..10 — base urgency multiplier (default 5)
-	CooldownS      int     `json:"cooldown_s"`      // seconds between successive ticks (default 900)
-	DecayRate      float64 `json:"decay_rate"`      // urgency decay rate (default 1.0)
-	Model          string  `json:"model"`           // LLM model id passed to the spawned agent
-	Provider       string  `json:"provider"`        // LLM provider id passed to the spawned agent
-	WorkerModel    string  `json:"worker_model"`    // optional: suggested worker model (foreman can override)
-	WorkerProvider string  `json:"worker_provider"` // optional: suggested worker provider (foreman can override)
-	GatewayKey     string  `json:"gateway_key"`     // per-foreman Hermes gateway key; empty = use daemon's shared --gateway-key
-	Command        string  `json:"command"`         // optional: custom spawn command (overrides default hermes chat)
-	NamespaceID    *string `json:"namespace_id"`    // optional: FK → namespaces.id; NULL = unscheduled in namespace mode
-	Deliver        string  `json:"deliver"`         // delivery target: platform:chat_id:thread_id (e.g. telegram:-1003310984808:12)
-	Enabled        bool    `json:"enabled"`         // disabled projects are never scheduled
-	CreatedAt      string  `json:"created_at"`      // RFC3339 timestamp
-	UpdatedAt      string  `json:"updated_at"`      // RFC3339 timestamp
+	Name              string  `json:"name"`                // PRIMARY KEY — also the DuckBrain project key
+	RepoURL           string  `json:"repo_url"`            // git clone URL
+	Workdir           string  `json:"workdir"`             // absolute path to the working copy on this host
+	Weight            int     `json:"weight"`              // 1..100 — weight budget consumed per tick (default 10)
+	Priority          int     `json:"priority"`            // 1..10 — base urgency multiplier (default 5)
+	CooldownS         int     `json:"cooldown_s"`          // seconds between successive ticks (default 900)
+	DecayRate         float64 `json:"decay_rate"`          // urgency decay rate (default 1.0)
+	Model             string  `json:"model"`               // LLM model id passed to the spawned agent
+	Provider          string  `json:"provider"`            // LLM provider id passed to the spawned agent
+	WorkerModel       string  `json:"worker_model"`        // optional: suggested worker model (foreman can override)
+	WorkerProvider    string  `json:"worker_provider"`     // optional: suggested worker provider (foreman can override)
+	GatewayKey        string  `json:"gateway_key"`         // per-foreman Hermes gateway key; empty = use daemon's shared --gateway-key
+	Command           string  `json:"command"`             // optional: custom spawn command (overrides default hermes chat)
+	NamespaceID       *string `json:"namespace_id"`        // optional: FK → namespaces.id; NULL = unscheduled in namespace mode
+	Deliver           string  `json:"deliver"`             // delivery target: platform:chat_id:thread_id (e.g. telegram:-1003310984808:12)
+	Enabled           bool    `json:"enabled"`             // disabled projects are never scheduled
+	CreatedAt         string  `json:"created_at"`          // RFC3339 timestamp
+	UpdatedAt         string  `json:"updated_at"`          // RFC3339 timestamp
+	LastTickStarted   string  `json:"last_tick_started"`   // RFC3339 of most recent tick spawn; "" when never spawned
+	LastTickCompleted string  `json:"last_tick_completed"` // RFC3339 of most recent tick completion (any outcome); "" when never completed
+
+	// Disable provenance (GAP-044): who disabled the project, when, and
+	// why. All empty when the project has never been disabled (or was
+	// re-enabled). Written by every disable path (API pause/PUT/DELETE,
+	// auto-disable) so fleet-state changes stay auditable.
+	DisabledAt     string `json:"disabled_at"`     // RFC3339 when disabled; "" = enabled/never disabled
+	DisabledBy     string `json:"disabled_by"`     // "api" | "api-pause" | "api-delete" | "auto-disable"
+	DisabledReason string `json:"disabled_reason"` // human-readable why (failure stats for auto-disable)
 
 	// ConsecutiveFailures counts consecutive SPAWN failures (gateway
 	// unreachable, process start error). Incremented by Spawner.Spawn on
@@ -101,6 +111,11 @@ func (p *Project) UnmarshalJSON(data []byte) error {
 	}
 	setString("CreatedAt", &p.CreatedAt)
 	setString("UpdatedAt", &p.UpdatedAt)
+	setString("LastTickStarted", &p.LastTickStarted)
+	setString("LastTickCompleted", &p.LastTickCompleted)
+	setString("DisabledAt", &p.DisabledAt)
+	setString("DisabledBy", &p.DisabledBy)
+	setString("DisabledReason", &p.DisabledReason)
 	return nil
 }
 

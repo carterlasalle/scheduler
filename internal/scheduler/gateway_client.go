@@ -4,11 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// ErrGatewayKeyRejected is the terminal classification for gateway 401/403
+// responses (GAP-035). During the 2026-08-04 outage the gateway silently
+// rejected per-foreman "fk-*" keys and every spawn kept failing with no
+// distinct signal — 8208+ failed ticks fleet-wide. Anything that wraps this
+// sentinel is an AUTH rejection, not a transient gateway error: the spawn
+// path treats it as terminal (no exec fallback, no retry flood) and emits a
+// HIGH event so a key regression is immediately visible.
+var ErrGatewayKeyRejected = errors.New("gateway key rejected")
 
 // GatewayClient calls the Hermes gateway API instead of spawning processes.
 type GatewayClient struct {
@@ -73,6 +84,25 @@ type ResponseError struct {
 	Type    string `json:"type"`
 }
 
+// authErrorDetail extracts a human-readable detail from a gateway error
+// body. The envelope {"error": {"type", "message"}} is preferred (keeps the
+// gateway's own classification, e.g. "auth_error: Invalid gateway API key");
+// anything unparseable falls back to the raw trimmed body.
+func authErrorDetail(body []byte) string {
+	var envelope struct {
+		Error ResponseError `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err == nil {
+		switch {
+		case envelope.Error.Type != "" && envelope.Error.Message != "":
+			return envelope.Error.Type + ": " + envelope.Error.Message
+		case envelope.Error.Message != "":
+			return envelope.Error.Message
+		}
+	}
+	return strings.TrimSpace(string(body))
+}
+
 // ExtractText returns the first output_text block content, or empty string.
 func (r *Response) ExtractText() string {
 	for _, item := range r.Output {
@@ -87,19 +117,43 @@ func (r *Response) ExtractText() string {
 	return ""
 }
 
-// Ping checks whether the gateway API is reachable and authenticated.
+// Ping checks whether the gateway API is reachable and authenticated with
+// the client's shared daemon key.
 func (g *GatewayClient) Ping(ctx context.Context) error {
+	return g.health(ctx, "")
+}
+
+// ValidateKey probes the gateway with the given key (GAP-035). A per-project
+// key is validated BEFORE dispatch so a rejected key fails the tick fast with
+// a clear classification instead of burning a full SendResponse cycle (and
+// potentially thousands of them fleet-wide). Returns ErrGatewayKeyRejected
+// (wrapped) on 401/403, a plain error on other failures. A gateway whose
+// /health does not authenticate keys returns nil — the SendResponse status
+// check is the dispatch-time backstop.
+func (g *GatewayClient) ValidateKey(ctx context.Context, key string) error {
+	return g.health(ctx, key)
+}
+
+// health performs the authenticated /health probe shared by Ping (daemon
+// key) and ValidateKey (per-project key). 401/403 are classified as
+// ErrGatewayKeyRejected so callers can distinguish a key regression from a
+// transient gateway outage.
+func (g *GatewayClient) health(ctx context.Context, key string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", g.baseURL+"/health", nil)
 	if err != nil {
 		return err
 	}
-	g.setAuth(req, "")
+	g.setAuth(req, key)
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("%w (HTTP %d): %s", ErrGatewayKeyRejected, resp.StatusCode, authErrorDetail(body))
+	}
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("gateway health: HTTP %d", resp.StatusCode)
 	}
 	return nil
@@ -137,6 +191,21 @@ func (g *GatewayClient) SendResponse(ctx context.Context, prompt, model, key str
 		return nil, fmt.Errorf("gateway POST: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	// GAP-035: the gateway response STATUS is authoritative. Before this
+	// guard, a 401 whose body happened to be valid JSON without an "error"
+	// field unmarshalled into an empty Response and the spawn "succeeded"
+	// silently — the exact failure mode of the 2026-08-04 outage. 401/403
+	// are classified as ErrGatewayKeyRejected (terminal, no retry flood);
+	// any other non-2xx fails the request instead of pretending success.
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("%w (HTTP %d): %s", ErrGatewayKeyRejected, resp.StatusCode, authErrorDetail(body))
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("gateway POST: HTTP %d: %s", resp.StatusCode, authErrorDetail(body))
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

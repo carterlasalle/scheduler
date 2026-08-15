@@ -53,16 +53,24 @@ type MultiPoolPacker struct {
 	allocator       *NamespaceAllocator
 	maxConcurrent   int
 	blackoutWindows []config.BlackoutWindow
+	pendingCounter  *PendingTaskCounter
 }
 
 // NewMultiPoolPacker creates a packer with the given global budget and
-// concurrency cap.
+// concurrency cap. The pending-task counter defaults to the package-level
+// shared instance so existing call sites keep working unchanged.
 func NewMultiPoolPacker(budget, maxConcurrent int, blackoutWindows []config.BlackoutWindow) *MultiPoolPacker {
 	return &MultiPoolPacker{
 		allocator:       NewNamespaceAllocator(budget),
 		maxConcurrent:   maxConcurrent,
 		blackoutWindows: blackoutWindows,
+		pendingCounter:  defaultPendingCounter,
 	}
+}
+
+// SetPendingCounter overrides the pending-task counter (for tests).
+func (m *MultiPoolPacker) SetPendingCounter(c *PendingTaskCounter) {
+	m.pendingCounter = c
 }
 
 // FlatFallback delegates to the existing Packer.Pick for flat single-pool mode.
@@ -117,11 +125,23 @@ func (m *MultiPoolPacker) packFlat(
 			float64(p.Priority), p.DecayRate, now, lastTick, createdAt,
 		)
 		// S-GAP-001 fairness: starvation boost applies in the flat fallback
-		// too, or the two selection paths would diverge.
+		// too, or the two selection paths would diverge. Monotonic in
+		// starvation age so the most-starved project sorts first regardless
+		// of priority (reopen 2026-08-05).
 		if isStarving(p.CooldownS, p.ConsecutiveFailures, lastTick, createdAt, now) && urgency < starvationBoostUrgency {
-			urgency = starvationBoostUrgency
-			log.Printf("FAIRNESS: %s boosted in flat fallback (cooldown=%ds failures=%d window=%v)",
-				p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS))
+			age := starvationAge(lastTick, createdAt, now)
+			urgency = starvationBoostUrgencyFor(age)
+			log.Printf("FAIRNESS: %s boosted in flat fallback (cooldown=%ds failures=%d window=%v starved=%v)",
+				p.Name, p.CooldownS, p.ConsecutiveFailures, StarvationWindow(p.CooldownS), age)
+		}
+		// SCHED-GAP-019: a project with pending board tasks gets a urgency
+		// boost below the starvation tier but far above organic urgency,
+		// so freshly-pending work jumps the eligible queue. Cooldown is NOT
+		// bypassed — the boost lives in the scoring loop only.
+		if m.pendingCounter != nil {
+			if pending := m.pendingCounter.CountPending(p.Workdir); pending > 0 && urgency < pendingBoostUrgency {
+				urgency = pendingBoostUrgencyFor(pending)
+			}
 		}
 		list = append(list, scored{proj: *p, urgency: urgency, lastTick: lastTick})
 	}

@@ -10,6 +10,7 @@ func TestNewUrgencyCalculator_BasicRange(t *testing.T) {
 	u := NewUrgencyCalculator(60*time.Second, 60*time.Minute, 10)
 	if u == nil {
 		t.Fatal("NewUrgencyCalculator returned nil")
+		return
 	}
 	if u.minInterval != 60*time.Second {
 		t.Errorf("minInterval = %v, want 60s", u.minInterval)

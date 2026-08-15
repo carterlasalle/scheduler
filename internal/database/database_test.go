@@ -89,6 +89,48 @@ func TestMigrate_Idempotent(t *testing.T) {
 	}
 }
 
+// TestMigrate_TicksHeartbeatColumn pins migration v10 (S-GAP-003): the ticks
+// table must gain heartbeat_at so gateway-spawn (pid=0) rows have a liveness
+// signal the zombie reapers can check.
+func TestMigrate_TicksHeartbeatColumn(t *testing.T) {
+	db := newTestDB(t)
+
+	var n int
+	if err := db.QueryRow(
+		`SELECT count(*) FROM pragma_table_info('ticks') WHERE name = 'heartbeat_at'`,
+	).Scan(&n); err != nil {
+		t.Fatalf("pragma_table_info(ticks): %v", err)
+	}
+	if n != 1 {
+		t.Errorf("ticks.heartbeat_at missing after Migrate (count=%d) — migration v10 not applied", n)
+	}
+
+	// The column must be usable for both write and julianday() comparison
+	// (the reaper query shape).
+	if _, err := db.Exec(
+		`INSERT INTO projects (name, repo_url, workdir, created_at, updated_at)
+		 VALUES ('sgap003-mig', 'https://example.com/sgap003-mig', '/tmp/sgap003-mig', '2026-08-05T00:00:00Z', '2026-08-05T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO ticks (id, project_name, status, spawned_at, created_at, heartbeat_at)
+		 VALUES ('sgap003-mig-t1', 'sgap003-mig', 'running', '2026-08-05T00:00:00Z', '2026-08-05T00:00:00Z', '2026-08-05T00:10:00Z')`,
+	); err != nil {
+		t.Fatalf("insert tick with heartbeat_at: %v", err)
+	}
+	var stale int
+	if err := db.QueryRow(
+		`SELECT count(*) FROM ticks WHERE id = 'sgap003-mig-t1'
+		 AND julianday(heartbeat_at) < julianday('now', '-15 minutes')`,
+	).Scan(&stale); err != nil {
+		t.Fatalf("julianday heartbeat comparison: %v", err)
+	}
+	if stale != 1 {
+		t.Errorf("julianday(heartbeat_at) comparison matched %d rows, want 1 (RFC3339 must parse)", stale)
+	}
+}
+
 func TestInitDB_WALAndForeignKeys(t *testing.T) {
 	// In-memory databases cannot use WAL mode — SQLite keeps "memory" mode
 	// for them. To verify WAL is actually applied, test with a temp file.
@@ -243,6 +285,56 @@ func TestDeleteProject_SoftDelete(t *testing.T) {
 	}
 }
 
+func TestPurgeProject_HardDelete(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	if err := CreateProject(ctx, db, sampleProject("alpha")); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	// A historical tick referencing the project (ticks.project_name is a FK
+	// with NO ACTION — purge must not be blocked by it, and the tick must
+	// survive the purge).
+	if err := CreateTick(ctx, db, sampleTick("alpha")); err != nil {
+		t.Fatalf("CreateTick: %v", err)
+	}
+
+	if err := PurgeProject(ctx, db, "alpha"); err != nil {
+		t.Fatalf("PurgeProject: %v", err)
+	}
+
+	// Row is gone from the projects table.
+	if _, err := GetProject(ctx, db, "alpha"); !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("GetProject after purge = %v, want ErrProjectNotFound", err)
+	}
+	// Historical tick retained (referenced by name string only).
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM ticks WHERE project_name = 'alpha'`).Scan(&n); err != nil {
+		t.Fatalf("count ticks: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("ticks for purged project = %d, want 1 (historical ticks must be retained)", n)
+	}
+	// FK enforcement restored: a new project can be created and a bogus
+	// orphan tick insert is still refused.
+	if err := CreateProject(ctx, db, sampleProject("beta")); err != nil {
+		t.Fatalf("CreateProject after purge: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO ticks (id, project_name, status, created_at) VALUES ('orphan', 'nope', 'queued', '2026-08-15T00:00:00Z')`); err == nil {
+		t.Error("orphan tick insert succeeded — foreign keys not restored after purge")
+	}
+}
+
+func TestPurgeProject_NotFound(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	err := PurgeProject(ctx, db, "nope")
+	if !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("PurgeProject(nope) = %v, want ErrProjectNotFound", err)
+	}
+}
+
 func TestCreateProject_CheckConstraintWeight(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -262,6 +354,48 @@ func TestCreateProject_CheckConstraintPriority(t *testing.T) {
 	err := CreateProject(ctx, db, p)
 	if err == nil {
 		t.Fatal("expected CHECK constraint error for priority=11, got nil")
+	}
+}
+
+// TestCreateProject_CaseInsensitiveNameDuplicate verifies that creating a
+// project whose name differs only in case from an ENABLED project is rejected
+// (SCHED-GAP-005). The two must not coexist or the daemon will split ticks
+// between them unpredictably.
+func TestCreateProject_CaseInsensitiveNameDuplicate(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	// "heading" is enabled (sampleProject sets Enabled: true).
+	if err := CreateProject(ctx, db, sampleProject("heading")); err != nil {
+		t.Fatalf("CreateProject heading: %v", err)
+	}
+	// Case-variant name, different workdir so only the name guard triggers.
+	dup := sampleProject("HEADING")
+	dup.Workdir = "/tmp/work/HEADING-other"
+	err := CreateProject(ctx, db, dup)
+	if err == nil {
+		t.Fatal("expected case-insensitive duplicate name error, got nil")
+	}
+	if !strings.Contains(err.Error(), "already registered by enabled project") {
+		t.Errorf("error = %q, want 'already registered by enabled project'", err.Error())
+	}
+}
+
+// TestCreateProject_CaseInsensitiveNameDisabledOK verifies that a disabled
+// (archived) project with the same lowercase name does NOT block creation —
+// an archived entry is harmless, mirroring the workdir check's semantics.
+func TestCreateProject_CaseInsensitiveNameDisabledOK(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	archived := sampleProject("speclang")
+	archived.Enabled = false
+	if err := CreateProject(ctx, db, archived); err != nil {
+		t.Fatalf("CreateProject archived speclang: %v", err)
+	}
+	// Canonical enabled registration with a case-variant name + different workdir.
+	canonical := sampleProject("SpecLang")
+	canonical.Workdir = "/tmp/work/speclang-canonical"
+	if err := CreateProject(ctx, db, canonical); err != nil {
+		t.Fatalf("CreateProject canonical SpecLang (disabled dup exists): %v", err)
 	}
 }
 

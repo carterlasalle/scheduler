@@ -66,6 +66,18 @@ func (l *Loop) evaluate() {
 		if l.slotPool != nil {
 			runningSet = l.slotPool.RunningSet()
 		}
+		// SCHED-GAP-030: after a daemon restart, in-flight gateway ticks
+		// (pid=0 rows left 'running' by cleanDanglingOnStartup) are NOT in
+		// the in-memory slot pool, so a fresh daemon's first EVAL would
+		// double-spawn every project with an in-flight tick (INFRA-012
+		// regression, observed 2026-08-11 restart). Merge the DB running
+		// set — the slot pool stays authoritative for in-process spawns
+		// (no SQLite race), the DB set adds survivors from before restart.
+		if dbRunning, _ := l.evalContext(context.Background()); len(dbRunning) > 0 {
+			for _, name := range dbRunning {
+				runningSet[name] = true
+			}
+		}
 		packed, err = l.packer.Pick(now, runningSet)
 		if err != nil {
 			log.Printf("EVAL: packer error: %v", err)
@@ -75,9 +87,21 @@ func (l *Loop) evaluate() {
 	}
 
 	if len(packed) == 0 {
+		// GAP-043: a zero-select eval with eligible projects present is an
+		// anomaly (evaluations log nothing on empty picks — operator cannot
+		// distinguish "evaluating" from "evaluating nothing"). The DB
+		// running set is authoritative here (same source as SCHED-GAP-030).
+		running, _ := l.evalContext(context.Background())
+		runningSet := make(map[string]bool, len(running))
+		for _, name := range running {
+			runningSet[name] = true
+		}
+		l.noteZeroSelect(now, runningSet)
 		l.mu.Unlock()
 		return
 	}
+
+	l.resetZeroSelect()
 
 	log.Printf("EVAL: %d project(s) selected, %d/%d budget used",
 		len(packed), sumWeights(packed), l.weightBudget)
@@ -95,7 +119,9 @@ func (l *Loop) evaluate() {
 
 	// Gateway liveness check: ping before spawning. If gateway is dead,
 	// release all slots and skip this cycle. Retry next eval.
-	if l.gatewayClient != nil {
+	// DOGFOOD-007: simulation mode must not depend on a live gateway —
+	// simulated spawns never touch the real spawner.
+	if l.gatewayClient != nil && !l.simulate {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		err := l.gatewayClient.Ping(ctx)
 		cancel()
@@ -126,12 +152,25 @@ func (l *Loop) evaluate() {
 			log.Printf("DEDUP: skipping %s — already running", proj.Name)
 			continue
 		}
+		if l.simulate {
+			// DOGFOOD-007: --simulate daemon mode must simulate, never
+			// spawn real foremen. The sim spawner inserts a tick row and
+			// completes it in 50-250ms; unique IDs come from simTickID.
+			tickID := l.simTickID(proj.Name, now)
+			if _, err := l.simSpawner.Spawn(proj, tickID); err != nil {
+				log.Printf("SIM: spawn %s failed: %v", proj.Name, err)
+			}
+			continue
+		}
 		l.slotPool.Spawn(proj, now, noDeliver, l.db)
 	}
 
 	// Alert escalation runs while pool processes ticks.
 	if len(packed) > 0 {
-		escalator := NewAlertEscalator(l.db, l.events)
+		l.mu.RLock()
+		policy := l.autoDisablePolicy
+		l.mu.RUnlock()
+		escalator := NewAlertEscalator(l.db, l.events, policy)
 		if err := escalator.RunAll(context.Background(), now); err != nil {
 			log.Printf("EVAL: escalation check error: %v", err)
 		}
@@ -176,18 +215,75 @@ func sumWeights(packed []PackedProject) int {
 	return total
 }
 
-// cleanDanglingOnStartup reaps ONLY ticks whose recorded pid no longer
-// exists (exec-fallback children die with the daemon). Ticks spawned via the
-// Hermes gateway have pid=0 and their HTTP sessions SURVIVE a daemon restart —
-// they must be left 'running' (CleanupStale(90m) in the eval loop handles
-// true gateway zombies inside the stale window).
+// gatewayZombieMaxAge is the maximum age of a pid=0 (gateway) tick's
+// heartbeat before the row is treated as an orphaned zombie (S-GAP-003).
+// The heartbeat goroutine in spawn.go refreshes heartbeat_at every 5 min, so
+// 15 min tolerates two missed beats while still reaping ~6x faster than the
+// 90-min CleanupStale backstop.
+const gatewayZombieMaxAge = 15 * time.Minute
+
+// staleGatewayTicksSQL selects running gateway-spawn ticks (pid=0) whose
+// heartbeat has gone stale — or was never written (pre-S-GAP-003 rows) while
+// spawned_at is itself older than the threshold. julianday() parses RFC3339
+// with varying offsets; a raw string comparison would be wrong. (CleanupStale's
+// raw compare is pre-existing and unchanged.)
+var staleGatewayTicksSQL = fmt.Sprintf(`
+SELECT id, project_name FROM ticks
+WHERE status='running' AND pid = 0 AND (
+    (heartbeat_at IS NOT NULL AND julianday(heartbeat_at) < julianday('now', '-%d minutes'))
+ OR (heartbeat_at IS NULL     AND julianday(spawned_at)  < julianday('now', '-%d minutes'))
+)`, int(gatewayZombieMaxAge/time.Minute), int(gatewayZombieMaxAge/time.Minute))
+
+// staleGatewayTick identifies one orphaned running gateway tick.
+type staleGatewayTick struct {
+	id      string
+	project string
+}
+
+// staleGatewayTicks returns running pid=0 ticks whose liveness signal is
+// older than gatewayZombieMaxAge. Rows are consumed and closed inside the
+// helper so callers can issue UPDATEs immediately (SQLite single-writer —
+// an UPDATE while a SELECT still holds the pool's only connection deadlocks).
+func (l *Loop) staleGatewayTicks(ctx context.Context) []staleGatewayTick {
+	rows, err := l.db.QueryContext(ctx, staleGatewayTicksSQL)
+	if err != nil {
+		log.Printf("ZOMBIE: stale-gateway query failed: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	var out []staleGatewayTick
+	for rows.Next() {
+		var t staleGatewayTick
+		if err := rows.Scan(&t.id, &t.project); err != nil {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// timeoutReapSQL marks a running tick as timed out. GAP-045: completed_at is
+// stamped exactly like the failed/completed paths (lifecycle.Complete,
+// CleanupStale) so a timeout row is terminal for duration / failure-window /
+// p99-latency math instead of reading as in-flight forever. outcome stays
+// unset — the CHECK constraint only allows ('committed','dry_run','failed',
+// 'timeout'); 'zombie_reaped' violates it (see cleanDanglingOnStartup).
+const timeoutReapSQL = `UPDATE ticks SET status='timeout', completed_at=? WHERE id=?`
+
+// cleanDanglingOnStartup reaps ticks whose recorded pid no longer exists
+// (exec-fallback children die with the daemon), plus pid=0 gateway rows whose
+// heartbeat is stale (S-GAP-003): the heartbeat goroutine dies with the
+// daemon, so a heartbeat older than gatewayZombieMaxAge means the session's
+// owner is gone. LIVE gateway ticks — fresh heartbeat, or NULL heartbeat with
+// a fresh spawned_at (pre-S-GAP-003 rows inside the grace window) — are left
+// 'running': their HTTP sessions SURVIVE a daemon restart.
 // Regression: INFRA-012 (2026-08-01) — restart marked live gateway ticks
 // 'timeout' and the packer spawned duplicate ticks for in-flight projects.
 func (l *Loop) cleanDanglingOnStartup() {
 	ctx := context.Background()
 
-	// Only ticks with a real pid can be checked against /proc. pid=0 rows are
-	// gateway spawns whose sessions outlive this process — leave them alone.
+	// Ticks with a real pid are checked against /proc. pid=0 rows are gateway
+	// spawns checked by heartbeat staleness below — never against /proc.
 	rows, err := l.db.QueryContext(ctx,
 		`SELECT id, project_name, pid FROM ticks WHERE status='running' AND pid > 0`)
 	if err != nil {
@@ -213,8 +309,16 @@ func (l *Loop) cleanDanglingOnStartup() {
 	}
 	rows.Close()
 
+	// S-GAP-003: orphaned gateway ticks (stale heartbeat) are reaped exactly
+	// like dead-pid rows. Rows younger than 15 min are NOT selected, so a
+	// restart never marks live gateway ticks timeout and spawns duplicates
+	// (INFRA-012 regression guard).
+	for _, gt := range l.staleGatewayTicks(ctx) {
+		dead = append(dead, deadTick{id: gt.id, project: gt.project, pid: 0})
+	}
+
 	if len(dead) == 0 {
-		log.Printf("DANGLING: startup cleanup — no dead-pid ticks found (gateway ticks with pid=0 left running)")
+		log.Printf("DANGLING: startup cleanup — no dead-pid or stale-gateway ticks found (live gateway ticks left running)")
 		return
 	}
 
@@ -248,16 +352,17 @@ func (l *Loop) cleanDanglingOnStartup() {
 		// violates it. BOTH cleanup paths (cleanDanglingOnStartup and
 		// reapZombies) must be outcome-free for the same reason — an
 		// UPDATE that sets outcome='zombie_reaped' is rejected by SQLite
-		// and the tick silently stays 'running' forever.
+		// and the tick silently stays 'running' forever. completed_at IS
+		// stamped (GAP-045) so reaped rows are terminal for duration math.
 		if _, err := l.db.ExecContext(ctx,
-			`UPDATE ticks SET status='timeout' WHERE id=?`, dt.id); err != nil {
+			timeoutReapSQL, time.Now().Format(time.RFC3339), dt.id); err != nil {
 			log.Printf("DANGLING: reaping tick %s (pid=%d): %v", dt.id, dt.pid, err)
 			continue
 		}
 		cleaned++
 	}
 	if cleaned > 0 {
-		log.Printf("DANGLING: cleaned %d dead-pid running tick(s) from previous process", cleaned)
+		log.Printf("DANGLING: cleaned %d dead running tick(s) from previous process (dead pid or stale gateway heartbeat)", cleaned)
 	}
 }
 
@@ -291,8 +396,9 @@ func (l *Loop) reapZombies() {
 		// outcome stays unset — see the CHECK-constraint comment in
 		// cleanDanglingOnStartup above; setting outcome here makes
 		// SQLite reject the UPDATE and the zombie is never reaped.
+		// completed_at IS stamped (GAP-045) — see timeoutReapSQL.
 		if _, err := l.db.ExecContext(ctx,
-			`UPDATE ticks SET status='timeout' WHERE id=?`, id); err != nil {
+			timeoutReapSQL, time.Now().Format(time.RFC3339), id); err != nil {
 			log.Printf("ZOMBIE: reaping tick %s: %v", id, err)
 			continue
 		}
@@ -300,5 +406,23 @@ func (l *Loop) reapZombies() {
 	}
 	if reaped > 0 {
 		log.Printf("ZOMBIE: reaped %d ticks (process died)", reaped)
+	}
+
+	// S-GAP-003: gateway ticks (pid=0) have no /proc entry — their liveness
+	// signal is the spawn-loop heartbeat. A heartbeat older than
+	// gatewayZombieMaxAge (or never written, with an equally old spawned_at)
+	// means the daemon that owned the session is gone; reap exactly like
+	// dead-pid ticks (status='timeout', outcome unset — CHECK constraint).
+	var gwReaped int
+	for _, gt := range l.staleGatewayTicks(ctx) {
+		if _, err := l.db.ExecContext(ctx,
+			timeoutReapSQL, time.Now().Format(time.RFC3339), gt.id); err != nil {
+			log.Printf("ZOMBIE: reaping gateway tick %s: %v", gt.id, err)
+			continue
+		}
+		gwReaped++
+	}
+	if gwReaped > 0 {
+		log.Printf("ZOMBIE: reaped %d gateway tick(s) (stale heartbeat)", gwReaped)
 	}
 }

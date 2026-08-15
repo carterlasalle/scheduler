@@ -15,6 +15,7 @@ func TestNewLoop_Defaults(t *testing.T) {
 	loop := scheduler.NewLoop(db, time.Minute, time.Hour, 10, 100, 5)
 	if loop == nil {
 		t.Fatal("NewLoop returned nil")
+		return
 	}
 	// Verify the loop starts and stops cleanly (no enabled projects → eval is a no-op).
 	done := make(chan struct{})

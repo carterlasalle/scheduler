@@ -10,7 +10,7 @@ the repo, not from test colors.
 - **Go 1.26+ daemon** (`cmd/schedulerd/`), `net/http` ServeMux, Go 1.22+
   method patterns. Single binary `bin/schedulerd`.
 - **SQLite via modernc.org/sqlite** (pure Go, WAL mode). Live DB:
-  `/home/kara/.hermes/coding-hermes/scheduler.db`. Schema: projects,
+  `~/.hermes/coding-hermes/scheduler.db`. Schema: projects,
   namespaces, ticks, events, migrations. Board state (`.coding-hermes/board/`)
   is separate: DuckDB live store + JSONL git mirror (see INFRA-013).
 - **Scheduler loop** (`internal/scheduler/`): every 60s evaluate → urgency =
@@ -18,7 +18,7 @@ the repo, not from test colors.
   budget with multi-pool namespace mode → spawn via Hermes gateway HTTP API
   (`POST /v1/responses`, `require_approval:false`) with `--no-exec-fallback`
   exec spawn as fallback. Cooldown per project; timeout does NOT back off
-  (deliberate); no auto-disable (deliberate, except 10+ consecutive timeouts/24h).
+  (deliberate); configurable auto-disable (SCHED-GAP-018, default off — `--auto-disable-failure-rate` > 0 to enable; the 10+ consecutive timeouts/24h safety net remains).
 - **REST API** (`internal/api/`): 20 method/path ops under `/api/v1` — health,
   status, projects CRUD-ish (no delete), ticks, events, namespaces, evaluate,
   pause/resume. **MCP** (`internal/mcp/`) JSON-RPC on `/mcp` with fleet_* tools.
@@ -111,3 +111,74 @@ the repo, not from test colors.
 4. Writes to the board: append JSONL records to `.coding-hermes/board/tasks.jsonl`.
 5. All control endpoints are idempotent and loopback-only — safe to probe;
    only POST /projects with a real intent (it persists forever).
+
+---
+
+# 2026-08-15 follow-up run — what changed, errors hit, the right way
+
+Second dogfood (first: 2026-08-04). All six DOGFOOD-001..006 fixes verified
+live. This section records the NEW errors/lessons; details in
+`2026-08-15-integration.md` and board tasks DOGFOOD-007..013.
+
+## How the sim/simulation path is actually built (and why it misleads)
+
+- `Loop` holds BOTH a real `spawner` and a `simSpawner`
+  (`internal/scheduler/loop.go`, `sim_spawn.go`). `SetSimulation()` only sets
+  `l.simulate` + the success rate — it never swaps `l.spawner`. The main
+  `Run()` loop therefore ALWAYS spawns via the real path: gateway client or
+  (if disabled/absent) "no gateway client and exec fallback disabled".
+- `simSpawner.Spawn` is used only in `RunBulkSim` (`--sim-count`) and the
+  `--sim-setup` fixture. `RunBulkSim`'s ticker fires every 500ms but IDs are
+  `sim-<project>-<HHMMSS>` (1s granularity) → second tick in the same second
+  hits the `ticks.id` UNIQUE constraint → FATAL.
+- **Right way today:** `--sim-setup --sim-ticks N` (works end-to-end, 13
+  fixture projects) or `--test-verify 3` (full E2E + perf + failure audit).
+  `--simulate` is a log-string-only no-op; `--sim-count` crashes. Task:
+  DOGFOOD-007.
+
+## Soft-delete mechanics (found by lifecycle test)
+
+- `DELETE /api/v1/projects/{name}?confirm=true` → `deleteProject` soft-deletes:
+  `enabled=0` + provenance stamp (`disabled_by='api-delete'`,
+  `disabled_reason='soft-deleted via DELETE ?confirm=true'`). Row remains
+  visible in list/detail. 409 guard while enabled ("pause it first").
+- Hard deletes (SQL `DELETE FROM projects`) orphan the rows' ticks, which
+  then live forever in `projects_failure_rates` (eduos/eduos-e2e/helios-work
+  — eduos-e2e shows rate=1.0, `auto_disable_armed=true` with no row).
+- **Right way:** treat DELETE as pause+mark; if you need a clean DB for
+  scratch work, use your own `--db` instance, not the live one. Task:
+  DOGFOOD-009.
+
+## Config reality (schema vs loader)
+
+- `internal/config` has a `RootConfig`/`LoadConfig` for `schedulerd.toml`
+  (unit-tested) but `cmd/schedulerd/main.go` never calls it — only the fleet
+  TOML loader (`--config fleet.toml`) is wired. `--schema` documents the
+  un-wired root file; `--show-config` prints "CLI flags only" and echoes env
+  overrides as comments (env vars ARE applied at boot — verified
+  `SCHEDULER_AUTO_DISABLE_FAILURE_RATE=0.5` → rate 0.50 in the boot log).
+- **Right way:** treat env vars as real config (auto-disable family at
+  least), treat `schedulerd.toml` as not-yet-loaded, and don't use
+  `--show-config` to audit effective values. Task: DOGFOOD-012.
+
+## Board append mechanics (for future dogfood/stand-in runs)
+
+- Board = `.coding-hermes/board/tasks.jsonl` (git) + `board.db` (DuckDB
+  mirror). The DuckDB `tasks` table has NO primary key → `INSERT OR IGNORE`
+  fails with "no UNIQUE/PRIMARY KEY constraints"; mirror with
+  `SELECT count(*) WHERE id=?` then plain INSERT (foreman's pattern:
+  "lockstep pre-append" to both stores).
+- `migrate-board-to-duckdb.py` is one-shot (tasks.md → DuckDB), not an append
+  tool. `validate-board-format.py` + `fleet-board-audit.py` exist for checks.
+
+## Environment facts worth knowing
+
+- Live daemon: systemd user unit, `-db ~/.hermes/coding-hermes/scheduler.db`,
+  `-config /home/kara/.hermes/fleet.toml`, gateway `:8642`, exec fallback
+  disabled, auto-disable at 0.9 (sim-beta/sim-delta/eduos-e2e all armed at
+  rate 1.0 but already disabled/deleted — auto-disable has nothing left to
+  fire on).
+- `~/.hermes/plugins/coding-hermes` → typo'd path (DOGFOOD-008) — /fleet
+  slash commands dead. The fleet runs entirely on the API/MCP/dashboard.
+- Verify cron green; eval-stall watchdog fires ~30-min cadence when the fleet
+  idles (by design, GAP-042); `EVAL-ZERO-SELECT` counters at 0.

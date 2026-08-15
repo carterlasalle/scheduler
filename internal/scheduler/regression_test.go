@@ -46,7 +46,7 @@ func TestSlotPool_ConcurrentAcquireStress(t *testing.T) {
 			}
 			mu.Unlock()
 			time.Sleep(10 * time.Millisecond)
-			pool.Release()
+			pool.Release(fmt.Sprintf("worker-%d", id))
 		}(i)
 	}
 
@@ -77,8 +77,8 @@ func TestSlotPool_DebounceCoalescing(t *testing.T) {
 	ch := pool.SlotFreed()
 	drainCh(ch, 50*time.Millisecond)
 
-	for range 5 {
-		pool.Release()
+	for _, n := range []string{"a", "b", "c", "d", "e"} {
+		pool.Release(n)
 	}
 
 	events := 0
@@ -435,8 +435,13 @@ func TestWorkerDefaults_BothSet(t *testing.T) {
 	if !containsStr(result, "gpt-5.6-sol") || !containsStr(result, "openai-codex") {
 		t.Errorf("result missing model or provider: %q", result)
 	}
-	if !containsStr(result, "AUTHORITATIVE, do not change") || !containsStr(result, "precedence") {
-		t.Errorf("result missing authoritative language: %q", result)
+	// Authoritative contract (fleet): configured worker_model overrides the
+	// board's advisory suggestion — no lenient fallback language.
+	if !containsStr(result, "AUTHORITATIVE") || !containsStr(result, "MUST be used") {
+		t.Errorf("result missing authoritative wording: %q", result)
+	}
+	if containsStr(result, "if available") || containsStr(result, "Feel free to use a different model") {
+		t.Errorf("result contains stale lenient fallback language: %q", result)
 	}
 }
 

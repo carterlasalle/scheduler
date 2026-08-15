@@ -5,31 +5,46 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 )
 
 // SlotPool manages concurrent tick slots using a buffered channel as a
-// semaphore. Projects acquire a slot before spawning and release it when
-// the tick completes or times out. The evaluation loop fires projects into
-// the pool and returns immediately — it never blocks waiting for spawns.
+// counting semaphore. Projects acquire a slot before spawning and release it
+// when the tick completes or times out. The evaluation loop fires projects
+// into the pool and returns immediately — it never blocks waiting for spawns.
+//
+// SCHED-GAP-021: the channel is a pure COUNTING semaphore (chan struct{});
+// the set of project names occupying slots lives in a mutex-protected
+// refcount map. A name-keyed channel cannot support "remove THIS project's
+// marker" — drain-and-refill races a full semaphore (all receivers blocked
+// on re-push = deadlock) and temporarily pulls tokens out of circulation
+// (over-admission). The refcount map makes Release(name) exact.
 type SlotPool struct {
-	sem       chan string // buffered channel = semaphore, value = project name
+	sem       chan struct{} // buffered channel = counting semaphore
 	maxSlots  int
 	timeout   time.Duration
 	spawner   *Spawner
 	lifecycle *LifecycleTracker
 	freedCh   chan struct{} // fires when a slot is released (single goroutine, no leak)
+
+	// running maps project name -> number of slots it holds. Guarded by mu;
+	// the mutex never covers a blocking channel wait (Acquire blocks on the
+	// channel itself), so it serializes only the tiny map critical sections.
+	mu      sync.Mutex
+	running map[string]int
 }
 
 // NewSlotPool creates a slot pool with at most maxConcurrent active ticks.
 func NewSlotPool(maxConcurrent int, timeout time.Duration, spawner *Spawner, lifecycle *LifecycleTracker) *SlotPool {
 	p := &SlotPool{
-		sem:       make(chan string, maxConcurrent),
+		sem:       make(chan struct{}, maxConcurrent),
 		maxSlots:  maxConcurrent,
 		timeout:   timeout,
 		spawner:   spawner,
 		lifecycle: lifecycle,
 		freedCh:   make(chan struct{}, maxConcurrent),
+		running:   make(map[string]int),
 	}
 	return p
 }
@@ -47,12 +62,11 @@ func (p *SlotPool) Running() int {
 // RunningSet returns the set of project names currently occupying slots.
 // Used by the packer to prevent duplicate spawns.
 func (p *SlotPool) RunningSet() map[string]bool {
-	set := make(map[string]bool)
-	// Drain and re-fill the channel to snapshot names. Non-blocking.
-	for i := 0; i < len(p.sem); i++ {
-		name := <-p.sem
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	set := make(map[string]bool, len(p.running))
+	for name := range p.running {
 		set[name] = true
-		p.sem <- name
 	}
 	return set
 }
@@ -61,21 +75,43 @@ func (p *SlotPool) RunningSet() map[string]bool {
 // given project name. Returns false if context is cancelled.
 func (p *SlotPool) Acquire(ctx context.Context, name string) bool {
 	select {
-	case p.sem <- name:
+	case p.sem <- struct{}{}:
+		p.mu.Lock()
+		p.running[name]++
+		p.mu.Unlock()
 		return true
 	case <-ctx.Done():
 		return false
 	}
 }
 
-// Release frees one slot and signals SlotFreed.
-func (p *SlotPool) Release() {
+// Release frees one slot held by the named project and signals SlotFreed.
+// SCHED-GAP-021: release is project-scoped — a completing tick removes ONLY
+// its own marker. Releasing a name that holds no slot is a no-op: it must
+// never free another project's marker (the old FIFO release popped the oldest
+// acquisition, evicting still-running projects from RunningSet and letting
+// EVAL spawn duplicate concurrent ticks — ring-runner 2026-08-09).
+func (p *SlotPool) Release(name string) {
+	p.mu.Lock()
+	if p.running[name] == 0 {
+		p.mu.Unlock()
+		return
+	}
+	p.running[name]--
+	if p.running[name] == 0 {
+		delete(p.running, name)
+	}
+	// The refcount said a slot was held, so a token is waiting in the
+	// semaphore — except when ReleaseAll already drained it (its drain and
+	// a racing Acquire's push+refcount are not atomic). Both cases leave
+	// the count consistent, so a non-blocking receive is exact.
 	select {
 	case <-p.sem:
-		select {
-		case p.freedCh <- struct{}{}:
-		default:
-		}
+	default:
+	}
+	p.mu.Unlock()
+	select {
+	case p.freedCh <- struct{}{}:
 	default:
 	}
 }
@@ -83,6 +119,8 @@ func (p *SlotPool) Release() {
 // ReleaseAll drains all currently-held slots and signals SlotFreed
 // for each one released. Safe to call when no slots are held.
 func (p *SlotPool) ReleaseAll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	for {
 		select {
 		case <-p.sem:
@@ -91,6 +129,7 @@ func (p *SlotPool) ReleaseAll() {
 			default:
 			}
 		default:
+			p.running = make(map[string]int)
 			return
 		}
 	}
@@ -111,7 +150,7 @@ func (p *SlotPool) Spawn(proj PackedProject, now time.Time, noDeliver bool, db *
 			log.Printf("SLOT: timeout waiting for free slot — dropping %s", proj.Name)
 			return
 		}
-		defer p.Release()
+		defer p.Release(proj.Name)
 
 		log.Printf("SLOT: acquired for %s (%d/%d running)", proj.Name, p.Running(), p.maxSlots)
 

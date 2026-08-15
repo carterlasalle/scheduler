@@ -16,18 +16,37 @@ type Server struct {
 	loop    *scheduler.Loop
 	started time.Time
 
+	// failureWindow is the number of recent ticks (per project) over which
+	// the /api/v1/status per-project failure-rate breakdown is computed.
+	// Zero or negative = default of 100.
+	failureWindow int
+
 	// duckbrainHealth, when set, is called to include DuckBrain sync health
 	// in /api/v1/status. Kept as a func so the API package doesn't import
 	// the sync package (no dependency cycle; nil = feature off).
 	duckbrainHealth func() map[string]interface{}
+
+	// resolvedConfig is the startup-time snapshot of the active
+	// three-layer config served by GET /api/v1/config (SCHED-GAP-034).
+	// Populated by main.go via SetResolvedConfig after TOML/env resolution.
+	resolvedConfig ResolvedConfig
 }
 
 // NewServer creates an API server.
 func NewServer(db *sql.DB, loop *scheduler.Loop) *Server {
 	return &Server{
-		db:      db,
-		loop:    loop,
-		started: time.Now(),
+		db:            db,
+		loop:          loop,
+		started:       time.Now(),
+		failureWindow: 100, // default; override via SetFailureWindow
+	}
+}
+
+// SetFailureWindow sets the number of recent ticks per project used for the
+// /api/v1/status per-project failure-rate breakdown (SCHED-GAP-018).
+func (s *Server) SetFailureWindow(n int) {
+	if n > 0 {
+		s.failureWindow = n
 	}
 }
 
@@ -42,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.health)
 	mux.HandleFunc("/api/v1/status", s.status)
+	mux.HandleFunc("/api/v1/config", s.config)
 	mux.HandleFunc("/api/v1/projects", s.handleProjects)
 	mux.HandleFunc("/api/v1/projects/", s.handleProjectByID)
 	mux.HandleFunc("/api/v1/namespaces", s.handleNamespaces)
@@ -107,15 +127,39 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	// GAP-047: auto-disable policy comes from the startup resolved-config
+	// snapshot. A Server built without SetResolvedConfig (tests) carries the
+	// zero value → threshold == 0 → feature off, no panic.
+	adThreshold := s.resolvedConfig.AutoDisableFailureRate
+	adMinTicks := s.resolvedConfig.AutoDisableMinTicks
 	activeTicks := countActiveTicks(ctx, s.db)
 	recentOutcomes := countRecentOutcomes(ctx, s.db)
+	failureRates := computeProjectFailureRates(ctx, s.db, s.failureWindow, adThreshold, adMinTicks)
 	lastEval := getLastEvalTime(ctx, s.db)
 	status := map[string]interface{}{
-		"budget_total":    100,
-		"active_projects": len(projects),
-		"active_ticks":    activeTicks,
-		"recent_outcomes": recentOutcomes,
-		"last_evaluation": lastEval,
+		"budget_total":           100,
+		"active_projects":        len(projects),
+		"active_ticks":           activeTicks,
+		"recent_outcomes":        recentOutcomes,
+		"projects_failure_rates": failureRates,
+		"failure_window":         s.failureWindow,
+		"last_evaluation":        lastEval,
+		// GAP-047: auto-disable configuration driving the per-project
+		// auto_disable_armed flags in projects_failure_rates.
+		"auto_disable": map[string]interface{}{
+			"enabled":   adThreshold > 0,
+			"threshold": adThreshold,
+			"window":    s.failureWindow,
+			"min_ticks": adMinTicks,
+		},
+	}
+	// GAP-043: zero-select diagnostics — consecutive zero-select evals with
+	// eligible projects present, and the eligible count at the last one.
+	if s.loop != nil {
+		zsCount, zsEligible, zsLast := s.loop.ZeroSelectStats()
+		status["zero_select_consecutive"] = zsCount
+		status["zero_select_eligible"] = zsEligible
+		status["zero_select_last_at"] = zsLast
 	}
 	if s.duckbrainHealth != nil {
 		status["duckbrain"] = s.duckbrainHealth()

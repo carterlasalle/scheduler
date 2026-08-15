@@ -30,6 +30,36 @@ func TestPrintSchema(t *testing.T) {
 			t.Errorf("schema missing property section: %s", key)
 		}
 	}
+
+	// Defaults must match the flag definitions in main.go (SCHED-GAP-003).
+	schedProps := props["scheduler"].(map[string]interface{})["properties"].(map[string]interface{})
+	minInterval := schedProps["min_interval"].(map[string]interface{})
+	if minInterval["default"] != "30s" {
+		t.Errorf("min_interval default = %v, want \"30s\" (main.go flag default)", minInterval["default"])
+	}
+	maxConcurrent := schedProps["max_concurrent"].(map[string]interface{})
+	if maxConcurrent["default"] != float64(10) {
+		t.Errorf("max_concurrent default = %v, want 10 (main.go flag default)", maxConcurrent["default"])
+	}
+
+	gwProps := props["gateway"].(map[string]interface{})["properties"].(map[string]interface{})
+	noExec, ok := gwProps["no_exec_fallback"].(map[string]interface{})
+	if !ok {
+		t.Error("gateway section missing no_exec_fallback property")
+	} else if noExec["default"] != true {
+		t.Errorf("no_exec_fallback default = %v, want true (main.go flag default)", noExec["default"])
+	}
+
+	// Project cooldown default must match what projectFromDef() applies in
+	// internal/config/loader.go (SCHED-GAP-033): 7200 (2h baseline, 3-speed
+	// policy), NOT the legacy hot default of 900.
+	projProps := props["projects"].(map[string]interface{})["items"].(map[string]interface{})["properties"].(map[string]interface{})
+	cooldown, ok := projProps["cooldown_s"].(map[string]interface{})
+	if !ok {
+		t.Error("projects.items section missing cooldown_s property")
+	} else if cooldown["default"] != float64(7200) {
+		t.Errorf("cooldown_s default = %v, want 7200 (loader defaultProjectCooldown)", cooldown["default"])
+	}
 }
 
 func TestPrintConfig(t *testing.T) {
@@ -43,7 +73,7 @@ func TestPrintConfig(t *testing.T) {
 			"127.0.0.1:9090",
 			20*60*1000000000,
 			24*60*60*1000000000,
-			10, 100, 8,
+			10, 100, 10,
 			false,
 			2*60*60*1000000000,
 			"http://127.0.0.1:8642",
@@ -62,7 +92,7 @@ func TestPrintConfig(t *testing.T) {
 		"max_interval = \"24h0m0s\"",
 		"num_levels = 10",
 		"weight_budget = 100",
-		"max_concurrent = 8",
+		"max_concurrent = 10",
 		"tick_timeout = \"2h0m0s\"",
 		"namespace_mode = false",
 		"[gateway]",

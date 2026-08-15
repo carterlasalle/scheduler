@@ -8,7 +8,7 @@ import (
 )
 
 // runGit runs a git command in dir and returns stdout (trimmed).
-func runGit(t *testing.T, dir string, args ...string) string {
+func runGitTest(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	out, err := cmd.CombinedOutput()
@@ -22,14 +22,14 @@ func runGit(t *testing.T, dir string, args ...string) string {
 func initTempRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	runGit(t, dir, "init", "-q")
-	runGit(t, dir, "config", "user.email", "test@example.com")
-	runGit(t, dir, "config", "user.name", "Test")
+	runGitTest(t, dir, "init", "-q")
+	runGitTest(t, dir, "config", "user.email", "test@example.com")
+	runGitTest(t, dir, "config", "user.name", "Test")
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, dir, "add", "a.txt")
-	runGit(t, dir, "commit", "-q", "-m", "initial")
+	runGitTest(t, dir, "add", "a.txt")
+	runGitTest(t, dir, "commit", "-q", "-m", "initial")
 	return dir
 }
 
@@ -70,8 +70,8 @@ func TestGitWorkDelta(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\nchanged\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, dir, "add", "a.txt", "b.txt")
-	runGit(t, dir, "commit", "-q", "-m", "second")
+	runGitTest(t, dir, "add", "a.txt", "b.txt")
+	runGitTest(t, dir, "commit", "-q", "-m", "second")
 
 	c, f = gitWorkDelta(dir, preHead, preTotal)
 	if c != 1 {

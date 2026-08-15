@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -49,6 +50,10 @@ func main() {
 	simSetup := flag.Bool("sim-setup", false, "Create test fixture with 14 dry-run projects")
 	simTicks := flag.Int("sim-ticks", 10, "Number of evaluation ticks to run in sim-setup mode")
 	configFile := flag.String("config", "", "Path to TOML fleet config file")
+	failureWindow := flag.Int("failure-window", 100, "Number of recent ticks per project for /api/v1/status per-project failure-rate breakdown")
+	autoDisableRate := flag.Float64("auto-disable-failure-rate", 0, "Per-project failure-rate threshold (0.0–1.0) for auto-disable; 0 = off (SCHED-GAP-018)")
+	autoDisableWindow := flag.Int("auto-disable-window", 100, "Ticks per project over which auto-disable failure rate is computed")
+	autoDisableMinTicks := flag.Int("auto-disable-min-ticks", 50, "Minimum ticks in window before auto-disable can fire")
 	logFile := flag.String("log-file", os.ExpandEnv("$HOME/.hermes/coding-hermes/scheduler.log"), "Path to append structured tick logs (JSON lines); empty disables")
 	showConfigFlag := flag.Bool("show-config", false, "Print resolved config (CLI + env) as TOML and exit")
 	schemaFlag := flag.Bool("schema", false, "Output JSON Schema for schedulerd.toml and exit")
@@ -68,6 +73,30 @@ func main() {
 
 	if os.Getenv("SCHEDULER_NAMESPACE_MODE") == "true" {
 		*namespaceMode = true
+	}
+
+	// SCHED-GAP-018: auto-disable config — SCHEDULER_* env vars override CLI
+	// flag defaults (Layer 2 > Layer 3 per the three-layer model). We resolve
+	// before the loop is created.
+	if v := os.Getenv("SCHEDULER_FAILURE_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			*failureWindow = n
+		}
+	}
+	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_FAILURE_RATE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			*autoDisableRate = f
+		}
+	}
+	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			*autoDisableWindow = n
+		}
+	}
+	if v := os.Getenv("SCHEDULER_AUTO_DISABLE_MIN_TICKS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			*autoDisableMinTicks = n
+		}
 	}
 
 	// ── Test-verify mode: run correctness checks and exit ──
@@ -138,13 +167,38 @@ func main() {
 		}
 	}
 
+	// SCHED-GAP-018: auto-disable + failure-rate window. Apply TOML values
+	// first (Layer 1), then CLI/env overrides (already resolved above) win.
+	if *configFile != "" {
+		if rootCfg, err := config.LoadRootConfig(*configFile); err == nil {
+			if rootCfg.Scheduler.AutoDisableWindow > 0 && *autoDisableWindow == 100 {
+				*autoDisableWindow = rootCfg.Scheduler.AutoDisableWindow
+			}
+			if rootCfg.Scheduler.AutoDisableMinTicks > 0 && *autoDisableMinTicks == 50 {
+				*autoDisableMinTicks = rootCfg.Scheduler.AutoDisableMinTicks
+			}
+			if rootCfg.Scheduler.FailureWindow > 0 && *failureWindow == 100 {
+				*failureWindow = rootCfg.Scheduler.FailureWindow
+			}
+			if rootCfg.Scheduler.AutoDisableFailureRate > 0 && *autoDisableRate == 0 {
+				*autoDisableRate = rootCfg.Scheduler.AutoDisableFailureRate
+			}
+		}
+	}
+	loop.SetAutoDisablePolicy(*autoDisableRate, *autoDisableWindow, *autoDisableMinTicks)
+	if *autoDisableRate > 0 {
+		log.Printf("AUTO-DISABLE: enabled — rate=%.2f window=%d min_ticks=%d", *autoDisableRate, *autoDisableWindow, *autoDisableMinTicks)
+	} else {
+		log.Printf("AUTO-DISABLE: off (rate=0)")
+	}
+
 	// Wire gateway HTTP client with retry (FEAT-003).
 	if *gatewayURL != "" && *gatewayKey != "" {
 		gwClient := scheduler.NewGatewayClient(*gatewayURL, *gatewayKey, *tickTimeout)
 		// Retry gateway connection with backoff — gateway may not be ready
 		// when schedulerd starts (systemd ordering). Once connected, keep
 		// retrying in the background if it ever drops.
-		var gwConnected bool
+		var gwConnected atomic.Bool
 		for attempt := 0; attempt < 10; attempt++ {
 			if err := gwClient.Ping(context.Background()); err != nil {
 				wait := time.Duration(attempt+1) * 2 * time.Second
@@ -153,33 +207,36 @@ func main() {
 			} else {
 				loop.SetGatewayClient(gwClient)
 				log.Printf("GATEWAY: connected to %s — using HTTP API instead of exec.Command", *gatewayURL)
-				gwConnected = true
+				gwConnected.Store(true)
 				break
 			}
 		}
-		if !gwConnected {
-			log.Printf("WARN: gateway %s unreachable after 10 retries — falling back to exec.Command", *gatewayURL)
-		}
-		// Launch background reconnector — keeps trying if gateway drops later.
-		go func() {
-			for {
-				time.Sleep(60 * time.Second)
-				if !gwConnected {
-					continue // already in fallback mode
-				}
-				if err := gwClient.Ping(context.Background()); err != nil {
-					log.Printf("WARN: gateway %s dropped (%v) — retrying...", *gatewayURL, err)
-					for attempt := 0; attempt < 10; attempt++ {
-						time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
-						if err := gwClient.Ping(context.Background()); err == nil {
-							log.Printf("GATEWAY: reconnected to %s", *gatewayURL)
-							loop.SetGatewayClient(gwClient)
-							break
-						}
-					}
-				}
+		// GAP-048: when the gateway is unreachable at startup, the daemon
+		// must honor --no-exec-fallback instead of silently degrading to
+		// exec.Command spawns. With the flag set (the default), the spawner
+		// has no HTTP client and drops ticks until the background reconnector
+		// re-engages HTTP. Without the flag, fall back to exec as before.
+		if !gwConnected.Load() {
+			if *noExecFallback {
+				log.Printf("WARN: gateway %s unreachable after 10 retries — exec fallback disabled (--no-exec-fallback), staying idle", *gatewayURL)
+				loop.EmitHighEvent("gateway", "gateway unreachable at startup and exec fallback disabled — staying idle", map[string]any{
+					"gateway_url":      *gatewayURL,
+					"no_exec_fallback": true,
+					"retries":          10,
+				})
+			} else {
+				log.Printf("WARN: gateway %s unreachable after 10 retries — falling back to exec.Command", *gatewayURL)
 			}
-		}()
+		}
+		// Launch background reconnector (GAP-048 fix): keeps trying if the
+		// gateway drops later AND when the daemon started in fallback mode.
+		// The original code skipped reconnection when gwConnected==false,
+		// so a fallback-start daemon never re-engaged HTTP even after the
+		// gateway recovered. Now the reconnector pings every 60s regardless
+		// and calls SetGatewayClient on success.
+		runGatewayReconnector(context.Background(), gwClient, func() {
+			loop.SetGatewayClient(gwClient)
+		}, &gwConnected, *gatewayURL)
 	}
 
 	// Simulation count mode: generate N ticks and exit.
@@ -215,6 +272,37 @@ func main() {
 	// starts later in background (see below).
 	duckbrain := sync.NewDuckBrainSync(db, *duckbrainNS, *duckbrainURL)
 	apiServer := api.NewServer(db, loop)
+	apiServer.SetFailureWindow(*failureWindow)
+	// SCHED-GAP-034: snapshot the ACTIVE three-layer config (TOML < env <
+	// CLI) for GET /api/v1/config. By this point the flag vars carry the
+	// resolved values — TOML overrides were applied above where flags sat
+	// at their defaults, and SCHEDULER_* env overrides were applied earlier.
+	// The gateway key is masked by SetResolvedConfig; it never reaches the wire.
+	apiServer.SetResolvedConfig(api.ResolvedConfig{
+		DBPath:                 *dbPath,
+		Listen:                 *listen,
+		MinInterval:            minInterval.String(),
+		MaxInterval:            maxInterval.String(),
+		NumLevels:              *numLevels,
+		WeightBudget:           *weightBudget,
+		MaxConcurrent:          *maxConcurrent,
+		TickTimeout:            tickTimeout.String(),
+		NamespaceMode:          *namespaceMode,
+		AutoDisableFailureRate: *autoDisableRate,
+		AutoDisableWindow:      *autoDisableWindow,
+		AutoDisableMinTicks:    *autoDisableMinTicks,
+		FailureWindow:          *failureWindow,
+		Gateway: api.GatewayConfigSnapshot{
+			URL:            *gatewayURL,
+			Key:            *gatewayKey,
+			ForemanHome:    *foremanHome,
+			NoExecFallback: *noExecFallback,
+		},
+		DuckBrain: api.DuckBrainConfigSnapshot{
+			Namespace: *duckbrainNS,
+			URL:       *duckbrainURL,
+		},
+	})
 	apiServer.SetDuckBrainHealth(func() map[string]interface{} {
 		h := duckbrain.Health()
 		return map[string]interface{}{
@@ -230,6 +318,7 @@ func main() {
 	mcpServer := mcp.NewServer(db, loop)
 	dashGen := dashboard.NewGenerator(db, *gatewayURL)
 	dashGen.SetDuckBrainURL(*duckbrainURL)
+	dashGen.SetSpawnCounts(loop.SpawnMethodCounts)
 
 	// Compose all handlers into one mux.
 	mux := http.NewServeMux()

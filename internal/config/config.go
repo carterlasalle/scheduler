@@ -2,9 +2,12 @@
 // seeding namespaces and projects at scheduler startup.
 //
 // A fleet.toml is loaded once at boot via the --config flag and upserted
-// into the existing SQLite database. Upsert here means create-only: rows
-// that already exist are left untouched so operator-made tweaks survive
-// restarts.
+// into the existing SQLite database. Namespaces are create-only (existing
+// rows are skipped), but EXISTING projects are re-pinned from fleet.toml at
+// every startup — cooldown, model, provider, and enabled are overwritten with
+// the fleet.toml values (see ApplyFleetConfig). fleet.toml is therefore the
+// durable pin source across restarts: API-side tweaks to a pinned project
+// survive only until the next restart.
 //
 // FEAT-005 extends this with a three-layer configuration model covering
 // daemon, scheduler, gateway, and duckbrain settings. Resolution priority
@@ -57,6 +60,23 @@ type SchedulerConfig struct {
 	TickTimeout     string           `toml:"tick_timeout"`
 	NamespaceMode   bool             `toml:"namespace_mode"`
 	BlackoutWindows []BlackoutWindow `toml:"blackout_windows"`
+
+	// AutoDisableFailureRate (0.0–1.0) is the per-project failure-rate
+	// threshold over the last AutoDisableWindow ticks at or above which the
+	// scheduler will disable the project automatically. Default 0 = feature
+	// off (SCHED-GAP-018). Operators opt in.
+	AutoDisableFailureRate float64 `toml:"auto_disable_failure_rate"`
+	// AutoDisableWindow is the number of recent ticks (per project) over
+	// which the failure rate is computed for auto-disable.
+	AutoDisableWindow int `toml:"auto_disable_window"`
+	// AutoDisableMinTicks is the minimum number of ticks a project must have
+	// within the window before it can be auto-disabled (sample-size guard).
+	AutoDisableMinTicks int `toml:"auto_disable_min_ticks"`
+	// FailureWindow is the number of recent ticks (per project) used by the
+	// /api/v1/status per-project failure-rate breakdown. Independent of the
+	// auto-disable window so the dashboard can stay readable even when
+	// auto-disable is off.
+	FailureWindow int `toml:"failure_window"`
 }
 
 // BlackoutWindow defines a peak-pricing window during which the scheduler
@@ -151,7 +171,7 @@ type ProjectDef struct {
 	Workdir     string  `toml:"workdir"`
 	Weight      int     `toml:"weight"`      // default 10 if <= 0
 	Priority    int     `toml:"priority"`    // default 5 if <= 0
-	CooldownS   int     `toml:"cooldown_s"`  // default 900 if <= 0
+	CooldownS   int     `toml:"cooldown_s"`  // default 7200 if <= 0 (2h baseline, 3-speed policy)
 	DecayRate   float64 `toml:"decay_rate"`  // default 1.0 if <= 0
 	Model       string  `toml:"model"`       // default DefaultModel
 	Provider    string  `toml:"provider"`    // default DefaultProvider
