@@ -59,10 +59,7 @@ func TestReconnector_FallbackStart_ReconnectsWhenGatewayReturns(t *testing.T) {
 
 	// Wait for the reconnector to ping + connect.
 	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if gwConnected.Load() && connectCount.Load() >= 1 {
-			break
-		}
+	for !gwConnected.Load() || connectCount.Load() < 1 {
 		if time.Now().After(deadline) {
 			t.Fatalf("reconnector never reconnected: gwConnected=%v, connectCount=%d",
 				gwConnected.Load(), connectCount.Load())
@@ -142,10 +139,7 @@ func TestReconnector_GatewayDrops_ReconnectsWithBackoff(t *testing.T) {
 
 	// Wait for reconnection.
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if connectCount.Load() >= 1 {
-			break
-		}
+	for connectCount.Load() < 1 {
 		if time.Now().After(deadline) {
 			t.Fatalf("reconnector never reconnected after drop: gwConnected=%v, connectCount=%d",
 				gwConnected.Load(), connectCount.Load())
