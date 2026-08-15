@@ -423,8 +423,6 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			}
 		}
 
-		atomic.AddInt64(&s.spawnCountExec, 1)
-
 		provider := s.provider
 		if project.Provider != "" {
 			provider = project.Provider
@@ -450,6 +448,11 @@ func (s *Spawner) Spawn(project PackedProject, tickID string) (*SpawnedTick, err
 			"CODING_HERMES_PROJECT="+project.Name,
 		)
 	}
+
+	// Count the spawn method for /api/v1/health (spawns_exec). Custom-command
+	// spawns (tests/probes) are exec spawns too — the HTTP path returned
+	// above, so reaching here always means an exec spawn (GAP-049).
+	atomic.AddInt64(&s.spawnCountExec, 1)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
