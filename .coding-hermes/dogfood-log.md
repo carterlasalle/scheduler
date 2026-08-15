@@ -29,3 +29,44 @@ DOGFOOD-001..006 appended to .coding-hermes/board/tasks.jsonl.
 
 **Foreman:** already at CooldownS=900 / Enabled=true, ticking normally —
 no wake needed.
+
+## 2026-08-15 — 🟡 PROMISING-BUT-ROUGH (improved, edge surfaces still rough)
+
+**Promise:** Same as 08-04: "A single Go binary that replaces dozens of static
+cron jobs" — priority-weighted fleet scheduler, HTTP-gateway spawns, REST +
+MCP + dashboard, outcome tracking.
+
+**Verdict evidence:** All six 08-04 P0/P1 findings are FIXED and verified live
+this run: create-project works per spec (snake_case body → 201 + defaults;
+dup-name → 409), wire format is snake_case everywhere with envelopes
+(projects → {"projects":[...]}, detail → {"project":...,"latest_tick"}),
+DELETE endpoint exists (409 guard vs enabled projects), `--test-verify 3`
+passes 6/6 (SCHEDULER VERIFIED, p99 16ms < 100ms spec at 29k rows), 2-hourly
+verify logs green (06/08/10 UTC runs), S06 spec Approved. Live fleet healthy:
+44 enabled, verify green, eval-stall watchdog firing as designed (GAP-042),
+zero-select counters 0. But the NEW user/evaluator journey is still rough:
+`--simulate` does NOT simulate (real spawner, gateway-key dependent),
+`--sim-count` FATAL-crashes (UNIQUE ticks.id collision), /fleet plugin
+symlink dangling (typo'd path), README §MCP has a fictional second tool
+table, DELETE is an undocumented soft-delete (junk still accumulates;
+3 scratch rows 69→72), GAP-044 provenance missing on all 25 legacy disabled
+rows, repo fleet.toml + docs/fleet.md mirrors stale.
+
+**Time-to-first-success:** ~1s (health check; no stalls this run).
+
+**Top 3 findings (task IDs):**
+1. **DOGFOOD-007 (P1)** — simulation broken on both documented entry points
+   (--simulate no-op for spawning; --sim-count FATAL crash).
+2. **DOGFOOD-008 (P1)** — /fleet plugin symlink dangling → slash commands dead.
+3. **DOGFOOD-009 (P2)** — DELETE is undocumented soft-delete; hard-deleted
+   projects still pollute projects_failure_rates.
+   (Also DOGFOOD-010 provenance backfill, DOGFOOD-011 fictional MCP table,
+   DOGFOOD-012 config over-claims, DOGFOOD-013 stale mirrors.)
+
+**Artifacts left:** docs/dogfood/2026-08-15-integration.md (new),
+skills/scheduler-usage/SKILL.md (rewritten to current reality),
+docs/dogfood/diagnostics.md (appended), board tasks DOGFOOD-007..013
+appended to tasks.jsonl + mirrored into board.db.
+
+**Foreman:** Cooldown was 21600s (≥14400) → woken to 900s via API PUT after
+task commit (Enabled stayed true).
