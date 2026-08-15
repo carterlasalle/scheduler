@@ -1111,3 +1111,12 @@ tasks:
   status: complete
   created_at: '2026-08-15T02:02:01.109471+00:00'
   completed_at: '2026-08-15T02:02:08.072192+00:00'
+- id: GAP-049
+  title: "CI lint red since b99e0ec \u2014 QF1006 in reconnector_test.go"
+  criteria:
+  - golangci-lint run reports 0 issues; go test -count=1 -short -p 1 -run TestReconnector
+    ./cmd/schedulerd/ passes; commit 8a665bf exists and is pushed; CI both workflows
+    green on 8a665bf
+  status: complete
+  created_at: '2026-08-15T02:43:35.217090+00:00'
+  completed_at: '2026-08-15T02:49:07.194412+00:00'
