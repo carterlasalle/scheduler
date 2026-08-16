@@ -25,7 +25,7 @@ cooldown_s = 43200
 model = "deepseek/deepseek-v4-flash-0731"
 provider = "openrouter"
 deliver = "telegram:-5376783577"
-enabled = true
+enabled = false
 
 [[projects]]
 name = "ozzgraph"
@@ -49,7 +49,7 @@ cooldown_s = 43200
 model = "deepseek/deepseek-v4-flash-0731"
 provider = "openrouter"
 deliver = "telegram:-5376783577"
-enabled = true
+enabled = false
 
 [[projects]]
 name = "sudobroker"
@@ -83,8 +83,8 @@ repo_url = "https://github.com/carterlasalle/cachepilot.git"
 workdir = "/home/hermes/cachepilot"
 weight = 10
 priority = 5
-cooldown_s = 900
+cooldown_s = 43200
 model = "deepseek/deepseek-v4-flash-0731"
 provider = "openrouter"
 deliver = "telegram:-5376783577"
-enabled = true
+enabled = false

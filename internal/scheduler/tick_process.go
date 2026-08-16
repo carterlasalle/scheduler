@@ -30,8 +30,16 @@ func (l *Loop) evaluate() {
 		"budget":       l.weightBudget,
 	})
 
-	// Cleanup stale ticks.
-	cleaned, _ := l.lifecycle.CleanupStale(90 * time.Minute)
+	// Cleanup stale ticks. Use the configured per-tick timeout so ghost
+	// "running" rows for dead processes age out on the same cadence the
+	// scheduler considers a tick expired (R6); keep the 90m legacy floor as
+	// the fallback so a slow tick never gets killed before its own Wait
+	// timeout would fire.
+	maxAge := 90 * time.Minute
+	if l.tickTimeout > 0 && l.tickTimeout > maxAge {
+		maxAge = l.tickTimeout
+	}
+	cleaned, _ := l.lifecycle.CleanupStale(maxAge)
 	if cleaned > 0 {
 		log.Printf("EVAL: cleaned up %d stale tick(s)", cleaned)
 	}

@@ -43,6 +43,12 @@ type Loop struct {
 	pauseCh  chan bool
 	evalCh   chan struct{} // event-driven eval trigger (SlotFreed → debounce → evalCh)
 	lastEval time.Time
+	// tickTimeout is the configured per-tick timeout (from --tick-timeout).
+	// It governs both the spawner's in-process wait AND the stale-running
+	// cleanup, so ghost "running" rows for dead processes age out at the
+	// same cadence the scheduler considers a tick expired (R6). Defaults to
+	// 2h; 0 means "use the hardcoded 90m legacy floor".
+	tickTimeout time.Duration
 	// lastStallEvent is when the GAP-042 stall watchdog last emitted its
 	// HIGH event (zero = never). Guards the stall-event throttle.
 	lastStallEvent time.Time
@@ -182,6 +188,7 @@ func (l *Loop) simTickID(projName string, now time.Time) string {
 func (l *Loop) SetTickTimeout(timeout time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.tickTimeout = timeout
 	if l.spawner != nil {
 		l.spawner.timeout = timeout
 	}

@@ -33,7 +33,7 @@ pipeline:
       tools: [read_file, run_command, search_pattern, read_diff, sandbox, detect_dead_code]
 
 defaults:
-  model: deepseek-v4-flash
+  model: deepseek/deepseek-v4-flash-0731
   max_iterations: 50
   check_for_updates: true
   update_check_ttl: "24h"

@@ -72,8 +72,18 @@ func (p *SlotPool) RunningSet() map[string]bool {
 }
 
 // Acquire blocks until a slot is free, then marks it occupied with the
-// given project name. Returns false if context is cancelled.
+// given project name. Returns false if context is cancelled OR the project
+// already holds a slot (R6 same-project running-overlap guard — a project
+// with an in-flight tick must never get a second concurrent slot, even if
+// the packer's running-set exclusion races a just-inserted DB row).
 func (p *SlotPool) Acquire(ctx context.Context, name string) bool {
+	p.mu.Lock()
+	if p.running[name] > 0 {
+		p.mu.Unlock()
+		log.Printf("SLOT: %s already has a running tick — refusing duplicate slot (R6 overlap guard)", name)
+		return false
+	}
+	p.mu.Unlock()
 	select {
 	case p.sem <- struct{}{}:
 		p.mu.Lock()
